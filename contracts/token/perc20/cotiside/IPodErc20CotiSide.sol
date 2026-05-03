@@ -45,15 +45,25 @@ interface IPodErc20CotiSide {
     function transferPublic(address from, address to, uint256 value) external;
 
     /**
-     * @notice Same MPC move as {transfer}; spender allowance is not checked here—`PodERC20` / policy must do that before sending.
-     * @dev **Gotcha:** without off-chain or PoD-side enforcement, `transferFrom` is equivalent to `transfer` on COTI.
+     * @notice Legacy same MPC move as {transfer}; kept for compatibility with older PoD tokens.
+     * @dev New allowance-based integrations should use {transferFromAsSpender}.
      */
     function transferFrom(address from, address to, gtUint256 calldata value) external;
 
     /**
-     * @notice Plain-amount variant of {transferFrom}; same caveats as {transferPublic}.
+     * @notice Legacy plain-amount variant of {transferFrom}; kept for compatibility with older PoD tokens.
      */
     function transferFromPublic(address from, address to, uint256 value) external;
+
+    /**
+     * @notice Spender-aware transferFrom that consumes allowance on COTI before moving garbled `value`.
+     */
+    function transferFromAsSpender(address spender, address from, address to, gtUint256 calldata value) external;
+
+    /**
+     * @notice Plain-amount variant of {transferFromAsSpender}.
+     */
+    function transferFromPublicAsSpender(address spender, address from, address to, uint256 value) external;
 
     /**
      * @notice Sets garbled allowance and `respond`s with owner- and spender-specific ciphertext of the same allowance amount.

@@ -128,6 +128,13 @@ export const INBOX_ABI = [
   },
   {
     type: "function",
+    name: "lastIncomingRequestId",
+    stateMutability: "view",
+    inputs: [{ name: "sourceChainId", type: "uint256" }],
+    outputs: [{ name: "", type: "bytes32" }],
+  },
+  {
+    type: "function",
     name: "batchProcessRequests",
     stateMutability: "nonpayable",
     inputs: [
