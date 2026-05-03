@@ -10,10 +10,13 @@ import "./PodERC20.sol";
 ///      verbatim from {PodERC20}.
 contract PodErc20Mintable is PodERC20 {
     /// @notice Sole address allowed to call {PodERC20.mint} (encrypted or plain variant).
-    address public immutable minter;
+    address public minter;
+    bool private _mintableInitialized;
 
     /// @notice Thrown when a non-minter tries to mint; carries the caller for debugging.
     error OnlyMinter(address caller);
+    error PodErc20MintableAlreadyInitialized();
+    error PodErc20MintableInvalidMinter();
 
     /**
      * @param _minter Address authorized to mint; zero is accepted but effectively disables mint forever.
@@ -31,7 +34,7 @@ contract PodErc20Mintable is PodERC20 {
         string memory _name,
         string memory _symbol
     ) PodERC20(_cotiChainId, _inbox, _cotiSideContract, _name, _symbol) {
-        minter = _minter;
+        _initializeMintableMinter(_minter);
     }
 
     /// @inheritdoc PodERC20
@@ -40,5 +43,40 @@ contract PodErc20Mintable is PodERC20 {
         if (msg.sender != minter) {
             revert OnlyMinter(msg.sender);
         }
+    }
+
+    function _initializePodErc20Mintable(
+        address _minter,
+        uint256 _cotiChainId,
+        address _inbox,
+        address _cotiSideContract,
+        string memory _name,
+        string memory _symbol
+    ) internal {
+        _initializePodErc20Mintable(_minter, _cotiChainId, _inbox, _cotiSideContract, _name, _symbol, 18);
+    }
+
+    function _initializePodErc20Mintable(
+        address _minter,
+        uint256 _cotiChainId,
+        address _inbox,
+        address _cotiSideContract,
+        string memory _name,
+        string memory _symbol,
+        uint8 _decimals
+    ) internal {
+        _initializePodERC20(_cotiChainId, _inbox, _cotiSideContract, _name, _symbol, _decimals);
+        _initializeMintableMinter(_minter);
+    }
+
+    function _initializeMintableMinter(address _minter) internal {
+        if (_mintableInitialized) {
+            revert PodErc20MintableAlreadyInitialized();
+        }
+        if (_minter == address(0)) {
+            revert PodErc20MintableInvalidMinter();
+        }
+        _mintableInitialized = true;
+        minter = _minter;
     }
 }

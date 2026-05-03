@@ -4,6 +4,7 @@ pragma solidity ^0.8.19;
 import "../../InboxUser.sol";
 import "../../fee/InboxFeeManager.sol";
 import "../../mpccodec/MpcAbiCodec.sol";
+import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "./IPodERC20.sol";
 import "./cotiside/IPodErc20CotiSide.sol";
 
@@ -15,12 +16,15 @@ contract PodERC20 is IPodERC20, InboxUser {
 
     // --- State variables ---
 
-    uint256 public immutable cotiChainId;
-    address public immutable cotiSideContract;
+    uint256 public cotiChainId;
+    address public cotiSideContract;
     string public name;
     string public symbol;
-    uint8 public immutable decimals;
+    uint8 public decimals;
     uint256 public totalSupply;
+    bool private _podERC20Initialized;
+    /// @notice Nonces consumed by public transfer permits verified on PoD.
+    mapping(address => uint256) public nonces;
 
     /// @dev Rough calldata size for the remote MPC method (itUint256 + two addresses or similar). Matches the test harness default.
     uint256 private constant FEE_ESTIMATE_REMOTE_CALL_SIZE = 512;
@@ -30,6 +34,11 @@ contract PodERC20 is IPodERC20, InboxUser {
     uint256 private constant FEE_ESTIMATE_REMOTE_EXEC_GAS = 300_000;
     /// @dev Headroom for PoD callback execution (decode + storage writes).
     uint256 private constant FEE_ESTIMATE_CALLBACK_EXEC_GAS = 300_000;
+    bytes32 private constant PUBLIC_TRANSFER_PERMIT_TYPEHASH =
+        keccak256("TransferPermit(address owner,address spender,address to,uint256 value,uint256 nonce,uint256 deadline)");
+    bytes32 private constant DOMAIN_TYPEHASH =
+        keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
+    bytes32 private constant PERMIT_DOMAIN_VERSION_HASH = keccak256("1");
     mapping(address => ctUint256) private _balances;
     mapping(address => mapping(address => IPodERC20.Allowance)) private _allowance;
     /// @dev One in-flight transfer or burn per address (used as both sender and receiver lock for transfers).
@@ -56,6 +65,10 @@ contract PodERC20 is IPodERC20, InboxUser {
     error OnlyCotiSideContract(uint256 remoteChainId, address remoteContract);
     /// @notice Thrown by the default {_checkMinter} hook; subclasses (e.g. {PodErc20Mintable}) can override to allow minting.
     error MintNotAllowed(address caller);
+    error PodERC20AlreadyInitialized();
+    error PodERC20InvalidInitialization();
+    error PermitExpired(uint256 deadline);
+    error InvalidPermitSigner(address signer, address owner);
 
     // --- Constructor ---
 
@@ -73,13 +86,7 @@ contract PodERC20 is IPodERC20, InboxUser {
         string memory _name,
         string memory _symbol
     ) {
-        setInbox(_inbox);
-        cotiSideContract = _cotiSideContract;
-        name = _name;
-        symbol = _symbol;
-        decimals = 18;
-        totalSupply = 0;
-        cotiChainId = _cotiChainId;
+        _initializePodERC20(_cotiChainId, _inbox, _cotiSideContract, _name, _symbol);
     }
 
     receive() external payable {}
@@ -103,13 +110,13 @@ contract PodERC20 is IPodERC20, InboxUser {
 
     /// @inheritdoc IPodERC20
     function transferFrom(address from, address to, itUint256 calldata value, uint256 callbackFeeLocalWei) external payable returns (bytes32 requestId) {
-        return _transfer(IPodErc20CotiSide.transferFrom.selector, from, to, value, msg.value, callbackFeeLocalWei);
+        return _transferFrom(IPodErc20CotiSide.transferFromAsSpender.selector, msg.sender, from, to, value, msg.value, callbackFeeLocalWei);
     }
 
     /// @inheritdoc IPodERC20
     function transferFrom(address from, address to, itUint256 calldata value) external payable returns (bytes32 requestId) {
         (, uint256 callbackFeeLocalWei) = _estimateTwoWayFeeInLocalToken();
-        return _transfer(IPodErc20CotiSide.transferFrom.selector, from, to, value, msg.value, callbackFeeLocalWei);
+        return _transferFrom(IPodErc20CotiSide.transferFromAsSpender.selector, msg.sender, from, to, value, msg.value, callbackFeeLocalWei);
     }
 
     /**
@@ -125,6 +132,47 @@ contract PodERC20 is IPodERC20, InboxUser {
         requestId = _transfer(IPodErc20CotiSide.transfer.selector, msg.sender, to, amount, msg.value, callbackFeeLocalWei);
         _requestCallbacks[requestId] = data;
         return requestId;
+    }
+
+    /// @inheritdoc IPodERC20
+    function transferFromAndCall(
+        address from,
+        address to,
+        uint256 amount,
+        bytes calldata data,
+        uint256 callbackFeeLocalWei
+    ) external payable returns (bytes32 requestId) {
+        requestId = _transferPublicFrom(
+            IPodErc20CotiSide.transferFromPublicAsSpender.selector,
+            msg.sender,
+            from,
+            to,
+            amount,
+            msg.value,
+            callbackFeeLocalWei
+        );
+        _requestCallbacks[requestId] = data;
+    }
+
+    /// @inheritdoc IPodERC20
+    function transferFromAndCallWithPermit(
+        address from,
+        address to,
+        uint256 amount,
+        PublicPermit calldata permit,
+        bytes calldata data,
+        uint256 callbackFeeLocalWei
+    ) external payable returns (bytes32 requestId) {
+        requestId = _transferPublicFromWithPermit(
+            msg.sender,
+            from,
+            to,
+            amount,
+            permit,
+            msg.value,
+            callbackFeeLocalWei
+        );
+        _requestCallbacks[requestId] = data;
     }
 
     /// @inheritdoc IPodERC20
@@ -158,7 +206,7 @@ contract PodERC20 is IPodERC20, InboxUser {
 
     /// @inheritdoc IPodERC20
     function transferFrom(address from, address to, uint256 amount, uint256 callbackFeeLocalWei) external payable returns (bytes32 requestId) {
-        return _transferPublic(IPodErc20CotiSide.transferFromPublic.selector, from, to, amount, msg.value, callbackFeeLocalWei);
+        return _transferPublicFrom(IPodErc20CotiSide.transferFromPublicAsSpender.selector, msg.sender, from, to, amount, msg.value, callbackFeeLocalWei);
     }
 
     /// @inheritdoc IPodERC20
@@ -235,9 +283,10 @@ contract PodERC20 is IPodERC20, InboxUser {
         bytes memory callbackData = _requestCallbacks[sourceRequestId];
         emit Transfer(from, to, senderValue, receiverValue);
         if (callbackData.length != 0) {
-            delete _requestCallbacks[sourceRequestId];
             (bool success, ) = address(to).call(callbackData);
-            if (!success) {
+            if (success) {
+                delete _requestCallbacks[sourceRequestId];
+            } else {
                 emit RequestCallbackFailed(from, to, sourceRequestId, callbackData);
             }
         }
@@ -364,7 +413,46 @@ contract PodERC20 is IPodERC20, InboxUser {
         totalFeeWei = targetFeeWei + callbackFeeWei;
     }
 
+    /// @notice EIP-712 domain separator used by {transferFromAndCallWithPermit}.
+    function publicTransferPermitDomainSeparator() external view returns (bytes32) {
+        return _publicTransferPermitDomainSeparator();
+    }
+
     // --- Internal ---
+
+    function _initializePodERC20(
+        uint256 _cotiChainId,
+        address _inbox,
+        address _cotiSideContract,
+        string memory _name,
+        string memory _symbol
+    ) internal {
+        _initializePodERC20(_cotiChainId, _inbox, _cotiSideContract, _name, _symbol, 18);
+    }
+
+    function _initializePodERC20(
+        uint256 _cotiChainId,
+        address _inbox,
+        address _cotiSideContract,
+        string memory _name,
+        string memory _symbol,
+        uint8 _decimals
+    ) internal {
+        if (_podERC20Initialized) {
+            revert PodERC20AlreadyInitialized();
+        }
+        if (_cotiChainId == 0 || _inbox == address(0) || _cotiSideContract == address(0)) {
+            revert PodERC20InvalidInitialization();
+        }
+        _podERC20Initialized = true;
+        setInbox(_inbox);
+        cotiChainId = _cotiChainId;
+        cotiSideContract = _cotiSideContract;
+        name = _name;
+        symbol = _symbol;
+        decimals = _decimals;
+        totalSupply = 0;
+    }
 
     /**
      * @notice Access-control hook invoked by {mint} overloads; base implementation always reverts with {MintNotAllowed}.
@@ -476,6 +564,38 @@ contract PodERC20 is IPodERC20, InboxUser {
         emit TransferRequestSubmitted(msg.sender, to, requestId);
     }
 
+    function _transferFrom(
+        bytes4 remoteTransferSelector,
+        address spender,
+        address from,
+        address to,
+        itUint256 calldata value,
+        uint256 totalValueWei,
+        uint256 callbackFeeLocalWei
+    ) internal returns (bytes32 requestId) {
+        if (_pendingTransferRequestIds[from] != bytes32(0) || _pendingTransferRequestIds[to] != bytes32(0)) {
+            revert TransferAlreadyPending(from, to, _pendingTransferRequestIds[from]);
+        }
+
+        IInbox.MpcMethodCall memory mpcMethodCall = MpcAbiCodec.create(remoteTransferSelector, 4)
+            .addArgument(spender)
+            .addArgument(from)
+            .addArgument(to)
+            .addArgument(value)
+            .build();
+
+        requestId = _sendPodTwoWay(
+            totalValueWei,
+            callbackFeeLocalWei,
+            mpcMethodCall,
+            PodERC20.transferCallback.selector,
+            PodERC20.transferError.selector
+        );
+        _pendingTransferRequestIds[from] = requestId;
+        _pendingTransferRequestIds[to] = requestId;
+        emit TransferRequestSubmitted(from, to, requestId);
+    }
+
     /**
      * @notice Shared two-way-fee estimator used by the auto-fee overloads.
      * @dev Uses {InboxFeeManager.calculateTwoWayFeeRequiredInLocalToken} with heuristic calldata/execution sizes.
@@ -492,6 +612,41 @@ contract PodERC20 is IPodERC20, InboxUser {
             FEE_ESTIMATE_REMOTE_EXEC_GAS,
             FEE_ESTIMATE_CALLBACK_EXEC_GAS,
             tx.gasprice
+        );
+    }
+
+    function _consumePublicTransferPermit(
+        address owner,
+        address spender,
+        address to,
+        uint256 amount,
+        PublicPermit calldata permit
+    ) internal {
+        if (block.timestamp > permit.deadline) {
+            revert PermitExpired(permit.deadline);
+        }
+
+        uint256 nonce = nonces[owner];
+        bytes32 structHash = keccak256(
+            abi.encode(PUBLIC_TRANSFER_PERMIT_TYPEHASH, owner, spender, to, amount, nonce, permit.deadline)
+        );
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", _publicTransferPermitDomainSeparator(), structHash));
+        address signer = ECDSA.recover(digest, permit.v, permit.r, permit.s);
+        if (signer != owner) {
+            revert InvalidPermitSigner(signer, owner);
+        }
+        nonces[owner] = nonce + 1;
+    }
+
+    function _publicTransferPermitDomainSeparator() internal view returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                DOMAIN_TYPEHASH,
+                keccak256(bytes(name)),
+                PERMIT_DOMAIN_VERSION_HASH,
+                block.chainid,
+                address(this)
+            )
         );
     }
 
@@ -551,6 +706,70 @@ contract PodERC20 is IPodERC20, InboxUser {
         _pendingTransferRequestIds[from] = requestId;
         _pendingTransferRequestIds[to] = requestId;
         emit TransferRequestSubmitted(msg.sender, to, requestId);
+    }
+
+    function _transferPublicFrom(
+        bytes4 remoteSelector,
+        address spender,
+        address from,
+        address to,
+        uint256 amount,
+        uint256 totalValueWei,
+        uint256 callbackFeeLocalWei
+    ) internal returns (bytes32 requestId) {
+        if (_pendingTransferRequestIds[from] != bytes32(0) || _pendingTransferRequestIds[to] != bytes32(0)) {
+            revert TransferAlreadyPending(from, to, _pendingTransferRequestIds[from]);
+        }
+
+        IInbox.MpcMethodCall memory mpcMethodCall = MpcAbiCodec.create(remoteSelector, 4)
+            .addArgument(spender)
+            .addArgument(from)
+            .addArgument(to)
+            .addArgument(amount)
+            .build();
+
+        requestId = _sendPodTwoWay(
+            totalValueWei,
+            callbackFeeLocalWei,
+            mpcMethodCall,
+            PodERC20.transferCallback.selector,
+            PodERC20.transferError.selector
+        );
+        _pendingTransferRequestIds[from] = requestId;
+        _pendingTransferRequestIds[to] = requestId;
+        emit TransferRequestSubmitted(from, to, requestId);
+    }
+
+    function _transferPublicFromWithPermit(
+        address spender,
+        address from,
+        address to,
+        uint256 amount,
+        PublicPermit calldata permit,
+        uint256 totalValueWei,
+        uint256 callbackFeeLocalWei
+    ) internal returns (bytes32 requestId) {
+        if (_pendingTransferRequestIds[from] != bytes32(0) || _pendingTransferRequestIds[to] != bytes32(0)) {
+            revert TransferAlreadyPending(from, to, _pendingTransferRequestIds[from]);
+        }
+        _consumePublicTransferPermit(from, spender, to, amount, permit);
+
+        IInbox.MpcMethodCall memory mpcMethodCall = MpcAbiCodec.create(IPodErc20CotiSide.transferFromPublic.selector, 3)
+            .addArgument(from)
+            .addArgument(to)
+            .addArgument(amount)
+            .build();
+
+        requestId = _sendPodTwoWay(
+            totalValueWei,
+            callbackFeeLocalWei,
+            mpcMethodCall,
+            PodERC20.transferCallback.selector,
+            PodERC20.transferError.selector
+        );
+        _pendingTransferRequestIds[from] = requestId;
+        _pendingTransferRequestIds[to] = requestId;
+        emit TransferRequestSubmitted(from, to, requestId);
     }
 
     /// @dev Plain-uint256 approve; sends to `IPodErc20CotiSide.approvePublic`.

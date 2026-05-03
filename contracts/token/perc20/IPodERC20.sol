@@ -29,6 +29,14 @@ interface IPodERC20 {
         bytes32 requestId;
     }
 
+    /// @notice EIP-712 permit data used by public transferFrom flows that should not wait for async approve.
+    struct PublicPermit {
+        uint256 deadline;
+        uint8 v;
+        bytes32 r;
+        bytes32 s;
+    }
+
     // --- Events ---
 
     /**
@@ -121,6 +129,31 @@ interface IPodERC20 {
     function transferAndCall(
         address to,
         itUint256 calldata amount,
+        bytes calldata data,
+        uint256 callbackFeeLocalWei
+    ) external payable returns (bytes32 requestId);
+
+    /**
+     * @notice Public-amount transferFrom followed by a PoD-side callback to `to` after the COTI transfer succeeds.
+     * @dev Uses the caller as spender and consumes allowance on COTI.
+     */
+    function transferFromAndCall(
+        address from,
+        address to,
+        uint256 amount,
+        bytes calldata data,
+        uint256 callbackFeeLocalWei
+    ) external payable returns (bytes32 requestId);
+
+    /**
+     * @notice Public-amount transferFrom authorized by a signature, followed by a callback to `to`.
+     * @dev Intended for portal withdrawals so users do not wait for a separate async approve.
+     */
+    function transferFromAndCallWithPermit(
+        address from,
+        address to,
+        uint256 amount,
+        PublicPermit calldata permit,
         bytes calldata data,
         uint256 callbackFeeLocalWei
     ) external payable returns (bytes32 requestId);

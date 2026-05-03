@@ -4,6 +4,22 @@ import { hardhat } from "viem/chains";
 import { RelayNode } from "../relay-node.js";
 import { INBOX_ABI } from "./inbox-abi.js";
 
+const DEFAULT_MINED_TARGET_EXECUTION_GAS = 2_500_000n;
+const MIN_BATCH_TX_GAS_HEADROOM = 4_000_000n;
+
+const minBatchTxGasForInnerStipend = (targetFee: bigint): bigint =>
+  targetFee === 0n ? 0n : (targetFee * 64n + 62n) / 63n + MIN_BATCH_TX_GAS_HEADROOM;
+
+const batchGasForMinedRequests = (mined: Array<{ targetFee?: bigint }>): bigint => {
+  const required = mined.reduce((sum, request) => {
+    const targetFee = request.targetFee && request.targetFee > 0n ? request.targetFee : DEFAULT_MINED_TARGET_EXECUTION_GAS;
+    return sum + minBatchTxGasForInnerStipend(targetFee);
+  }, 0n);
+  return required > 0n ? required : DEFAULT_MINED_TARGET_EXECUTION_GAS + MIN_BATCH_TX_GAS_HEADROOM;
+};
+
+const requestNonce = (requestId: `0x${string}`): bigint => BigInt(requestId) & ((1n << 128n) - 1n);
+
 export class RelayHelper {
   private chain1Client: ReturnType<typeof createPublicClient>;
   private chain2Client: ReturnType<typeof createPublicClient>;
@@ -77,7 +93,6 @@ export class RelayHelper {
       functionName: "getRequests",
       args: [BigInt(from), BigInt(take)],
     })) as any[];
-
     return requests.map((request) => ({
       requestId: this.getTupleField<`0x${string}`>(request, "requestId", 0),
       chainId: Number(this.getTupleField<bigint>(request, "targetChainId", 1) ?? 0n),
@@ -132,6 +147,7 @@ export class RelayHelper {
     for (const msg of messages) {
       if (msg.requestId && msg.sender) {
         try {
+          const gas = batchGasForMinedRequests([{ targetFee: msg.targetFee ?? 0n }]);
           await this.chain2Wallet.writeContract({
             address: this.inbox2Address,
             abi: INBOX_ABI,
@@ -161,6 +177,7 @@ export class RelayHelper {
                 },
               ],
             ],
+            gas,
           } as any);
           relayed++;
         } catch (error: any) {
@@ -213,6 +230,16 @@ export class RelayHelper {
       functionName: "getRequests",
       args: [BigInt(from), BigInt(take)],
     })) as any[];
+    const latestMinedRequestId = (await this.chain2Client.readContract({
+      address: this.inbox2Address,
+      abi: INBOX_ABI,
+      functionName: "lastIncomingRequestId",
+      args: [BigInt(this.chain1Id)],
+    })) as `0x${string}`;
+    const latestMinedNonce =
+      latestMinedRequestId !== "0x0000000000000000000000000000000000000000000000000000000000000000"
+        ? requestNonce(latestMinedRequestId)
+        : 0n;
 
     const mined: Array<{
       requestId: `0x${string}`;
@@ -255,6 +282,10 @@ export class RelayHelper {
         continue;
       }
 
+      if (requestNonce(requestId) <= latestMinedNonce) {
+        continue;
+      }
+
       if (targetChainId !== BigInt(this.chain2Id)) {
         continue;
       }
@@ -263,15 +294,21 @@ export class RelayHelper {
         continue;
       }
 
-      const incoming = await this.chain2Client.readContract({
-        address: this.inbox2Address,
-        abi: INBOX_ABI,
-        functionName: "incomingRequests",
-        args: [requestId],
-      });
-
-      const incomingRequestId = this.getTupleField<`0x${string}`>(incoming, "requestId", 0);
-      const incomingExecuted = this.getTupleField<boolean>(incoming, "executed", 10);
+      let incomingRequestId: `0x${string}` | undefined;
+      let incomingExecuted = false;
+      try {
+        const incoming = await this.chain2Client.readContract({
+          address: this.inbox2Address,
+          abi: INBOX_ABI,
+          functionName: "incomingRequests",
+          args: [requestId],
+        });
+        incomingRequestId = this.getTupleField<`0x${string}`>(incoming, "requestId", 0);
+        incomingExecuted = this.getTupleField<boolean>(incoming, "executed", 10) ?? false;
+      } catch {
+        // Empty Request structs contain dynamic fields that some viem versions cannot decode.
+        incomingRequestId = undefined;
+      }
 
       if (incomingRequestId && incomingExecuted) {
         continue;
@@ -296,15 +333,20 @@ export class RelayHelper {
       return 0;
     }
 
-    const mineHash = await this.chain2Wallet.writeContract({
-      address: this.inbox2Address,
-      abi: INBOX_ABI,
-      functionName: "batchProcessRequests",
-      chain: { ...hardhat, id: this.chain2Id },
-      account: this.account,
-      args: [BigInt(this.chain1Id), mined],
-    } as any);
-    await this.chain2Client.waitForTransactionReceipt({ hash: mineHash });
+    for (const request of mined) {
+      const gas = batchGasForMinedRequests([request]);
+
+      const mineHash = await this.chain2Wallet.writeContract({
+        address: this.inbox2Address,
+        abi: INBOX_ABI,
+        functionName: "batchProcessRequests",
+        chain: { ...hardhat, id: this.chain2Id },
+        account: this.account,
+        args: [BigInt(this.chain1Id), [request]],
+        gas,
+      } as any);
+      await this.chain2Client.waitForTransactionReceipt({ hash: mineHash });
+    }
 
     return mined.length;
   }
