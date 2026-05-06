@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { getAddress, zeroAddress, zeroHash, type PublicClient, type WalletClient } from "viem";
+import { encodePacked, getAddress, keccak256, zeroAddress, zeroHash, type PublicClient, type WalletClient } from "viem";
 
 export const RECIPIENT = "0x00000000000000000000000000000000000000b0" as `0x${string}`;
 export const COTI_SIDE_TOKEN = "0x00000000000000000000000000000000000000c0" as `0x${string}`;
@@ -86,9 +86,17 @@ export async function requestWithdraw(
 ) {
   const transferFee = params.transferFee ?? DEFAULT_WITHDRAW.transferFee;
   const burnFee = params.burnFee ?? DEFAULT_WITHDRAW.burnFee;
+  const recipient = params.recipient ?? ctx.recipient;
+  const nonce = await ctx.portal.read.withdrawalNonce();
+  const withdrawalId = keccak256(
+    encodePacked(
+      ["address", "address", "address", "uint256", "uint256"],
+      [ctx.portal.address, ctx.owner, recipient, amount, nonce]
+    )
+  );
   await ctx.portal.write.requestWithdrawWithPermit(
     [
-      params.recipient ?? ctx.recipient,
+      recipient,
       amount,
       transferFee,
       DEFAULT_WITHDRAW.transferCallbackFee,
@@ -101,10 +109,20 @@ export async function requestWithdraw(
     ],
     { ...writeOpts(ctx), value: transferFee + burnFee }
   );
+  const transferRequestId = await ctx.pToken.read.lastTransferRequestId();
+  return { withdrawalId, transferRequestId };
 }
 
 export async function completePTokenTransferCallback(ctx: PortalTestContext) {
   await ctx.pToken.write.triggerLastTransferCallback([], writeOpts(ctx));
+}
+
+export async function markPTokenTransferSuccessful(ctx: PortalTestContext) {
+  await ctx.pToken.write.markLastTransferSuccessful([], writeOpts(ctx));
+}
+
+export async function triggerWithdrawalRelease(ctx: PortalTestContext, withdrawalId: `0x${string}`) {
+  await ctx.portal.write.triggerWithdrawalRelease([withdrawalId], writeOpts(ctx));
 }
 
 export async function setBurnSubmissionFailure(ctx: PortalTestContext, shouldFail: boolean) {

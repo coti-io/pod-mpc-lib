@@ -33,11 +33,23 @@ contract MpcExecutor is InboxUser, IPodExecutor64, IPodExecutor128, IPodExecutor
         _emitRespondU64(MpcCore.checkedMul(a, b), cOwner, false);
     }
 
-    /// @dev COTI MPC requires `setPublic*` and `mul` in the same contract; do not pass `gt*` from another contract.
+    /// @notice Wrapping multiply modulo 2^64. Callers must require modulo arithmetic as part of their invariant.
+    function mulWrapping64(gtUint64 a, gtUint64 b, address cOwner) external onlyInbox {
+        _emitRespondU64(MpcCore.mul(a, b), cOwner, false);
+    }
+
+    /// @dev COTI MPC requires `setPublic*` and `checkedMul` in the same contract; do not pass `gt*` from another contract.
     function mul64FromPlain(uint64 a, uint64 b, address cOwner) external onlyInbox {
         gtUint64 ga = MpcCore.setPublic64(a);
         gtUint64 gb = MpcCore.setPublic64(b);
         _emitRespondU64(MpcCore.checkedMul(ga, gb), cOwner, false);
+    }
+
+    /// @notice Plain-input wrapping multiply modulo 2^64. Use only for explicit modulo arithmetic.
+    function mulWrapping64FromPlain(uint64 a, uint64 b, address cOwner) external onlyInbox {
+        gtUint64 ga = MpcCore.setPublic64(a);
+        gtUint64 gb = MpcCore.setPublic64(b);
+        _emitRespondU64(MpcCore.mul(ga, gb), cOwner, false);
     }
 
     function div64(gtUint64 a, gtUint64 b, address cOwner) external onlyInbox {
@@ -129,14 +141,25 @@ contract MpcExecutor is InboxUser, IPodExecutor64, IPodExecutor128, IPodExecutor
         _emitRespondU128(MpcCore.checkedSub(a, b), cOwner, false);
     }
 
-    /// @dev Uses wrapping `MpcCore.mul` (mod 2^128). `checkedMul` ends with `checkedSub(0, overflowLimbs)` which
-    ///      can revert on COTI when high limbs are secret-shared zero even if the true product fits in 128 bits.
+    /// @notice Checked multiplication. Reverts when the true product does not fit in uint128.
     function mul128(gtUint128 memory a, gtUint128 memory b, address cOwner) external onlyInbox {
+        _emitRespondU128(MpcCore.checkedMul(a, b), cOwner, false);
+    }
+
+    /// @notice Wrapping multiply modulo 2^128. Callers must require modulo arithmetic as part of their invariant.
+    function mulWrapping128(gtUint128 memory a, gtUint128 memory b, address cOwner) external onlyInbox {
         _emitRespondU128(MpcCore.mul(a, b), cOwner, false);
     }
 
-    /// @dev COTI MPC requires `setPublic*` and `mul` in the same contract; do not pass `gt*` from another contract.
+    /// @dev COTI MPC requires `setPublic*` and `checkedMul` in the same contract; do not pass `gt*` from another contract.
     function mul128FromPlain(uint128 a, uint128 b, address cOwner) external onlyInbox {
+        gtUint128 memory ga = MpcCore.setPublic128(a);
+        gtUint128 memory gb = MpcCore.setPublic128(b);
+        _emitRespondU128(MpcCore.checkedMul(ga, gb), cOwner, false);
+    }
+
+    /// @notice Plain-input wrapping multiply modulo 2^128. Use only for explicit modulo arithmetic.
+    function mulWrapping128FromPlain(uint128 a, uint128 b, address cOwner) external onlyInbox {
         gtUint128 memory ga = MpcCore.setPublic128(a);
         gtUint128 memory gb = MpcCore.setPublic128(b);
         _emitRespondU128(MpcCore.mul(ga, gb), cOwner, false);
@@ -224,14 +247,25 @@ contract MpcExecutor is InboxUser, IPodExecutor64, IPodExecutor128, IPodExecutor
         _emitRespondU256(MpcCore.checkedSub(a, b), cOwner, false);
     }
 
-    /// @dev Wrapping multiply mod 2^256 via `MpcCore.mul`. On COTI, use `MpcExecutorCotiTest` + `MpcExecutorCotiProxyInbox`
-    ///      (system test) to exercise this path with a minimal inbox `respond` stub.
+    /// @notice Checked multiplication. Reverts when the true product does not fit in uint256.
     function mul256(gtUint256 memory a, gtUint256 memory b, address cOwner) external onlyInbox {
+        _emitRespondU256(MpcCore.checkedMul(a, b), cOwner, false);
+    }
+
+    /// @notice Wrapping multiply modulo 2^256. Callers must require modulo arithmetic as part of their invariant.
+    function mulWrapping256(gtUint256 memory a, gtUint256 memory b, address cOwner) external onlyInbox {
         _emitRespondU256(MpcCore.mul(a, b), cOwner, false);
     }
 
-    /// @dev COTI MPC requires `setPublic*` and `mul` in the same contract; do not pass `gt*` from another contract.
+    /// @dev COTI MPC requires `setPublic*` and `checkedMul` in the same contract; do not pass `gt*` from another contract.
     function mul256FromPlain(uint256 a, uint256 b, address cOwner) external onlyInbox {
+        gtUint256 memory ga = MpcCore.setPublic256(a);
+        gtUint256 memory gb = MpcCore.setPublic256(b);
+        _emitRespondU256(MpcCore.checkedMul(ga, gb), cOwner, false);
+    }
+
+    /// @notice Plain-input wrapping multiply modulo 2^256. Use only for explicit modulo arithmetic.
+    function mulWrapping256FromPlain(uint256 a, uint256 b, address cOwner) external onlyInbox {
         gtUint256 memory ga = MpcCore.setPublic256(a);
         gtUint256 memory gb = MpcCore.setPublic256(b);
         _emitRespondU256(MpcCore.mul(ga, gb), cOwner, false);

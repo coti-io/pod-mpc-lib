@@ -14,9 +14,11 @@ contract MockPodERC20ForPortal {
     uint256 public lastTransferAmount;
     uint256 public lastTransferValue;
     uint256 public lastTransferCallbackFee;
+    bytes32 public lastTransferRequestId;
     bytes public lastTransferCallbackData;
     uint256 public burnedAmount;
     bool public burnShouldRevert;
+    mapping(bytes32 => IPodERC20.RequestStatus) public requests;
 
     function mint(address to, uint256 amount, uint256 callbackFeeLocalWei) external payable returns (bytes32 requestId) {
         lastMintRecipient = to;
@@ -40,7 +42,9 @@ contract MockPodERC20ForPortal {
         lastTransferValue = msg.value;
         lastTransferCallbackFee = callbackFeeLocalWei;
         lastTransferCallbackData = data;
-        return _consumeRequestId();
+        requestId = _consumeRequestId();
+        lastTransferRequestId = requestId;
+        requests[requestId] = IPodERC20.RequestStatus.Pending;
     }
 
     function burn(uint256 amount, uint256) external payable returns (bytes32 requestId) {
@@ -48,7 +52,8 @@ contract MockPodERC20ForPortal {
             revert("MockPodERC20ForPortal: burn failed");
         }
         burnedAmount += amount;
-        return _consumeRequestId();
+        requestId = _consumeRequestId();
+        requests[requestId] = IPodERC20.RequestStatus.Pending;
     }
 
     function setBurnShouldRevert(bool value) external {
@@ -56,9 +61,14 @@ contract MockPodERC20ForPortal {
     }
 
     function triggerLastTransferCallback() external returns (bytes memory returndata) {
+        requests[lastTransferRequestId] = IPodERC20.RequestStatus.Success;
         (bool success, bytes memory data) = lastTransferTo.call(lastTransferCallbackData);
         require(success, string(data));
         return data;
+    }
+
+    function markLastTransferSuccessful() external {
+        requests[lastTransferRequestId] = IPodERC20.RequestStatus.Success;
     }
 
     function _consumeRequestId() private returns (bytes32 requestId) {

@@ -4,8 +4,6 @@ pragma solidity ^0.8.19;
 import "@openzeppelin/contracts/utils/math/Math.sol";
 import "./PriceOracle.sol";
 
-import "hardhat/console.sol";
-
 /// @title InboxFeeManager
 /// @notice Validates cross-chain message fee budgets. Mixed into {InboxBase}.
 /// @dev `msg.value` is converted to **gas units** using `tx.gasprice` (or {DEFAULT_GAS_PRICE} if zero). {Request.targetFee} and {Request.callerFee} store gas budgets, not wei. Oracle price ratio maps remote gas budgets when configured; otherwise 1:1.
@@ -35,11 +33,15 @@ abstract contract InboxFeeManager {
     /// @dev Reserved execution gas units for error paths (documentation constant; enforcement is application-level).
     uint256 internal constant MIN_GAS_RESERVE_EXECUTION = 100_000;
 
-    error PriceOracleNotInitialized();
+    /// @notice Total native fee was zero.
     error TotalFeeTooLow(uint256 totalFee);
+    /// @notice Callback fee slice was zero, exceeded total, or bought too few local callback gas units.
     error CallbackFeeTooLow(uint256 callbackFee);
+    /// @notice Remote execution fee slice bought too few remote gas units.
     error TargetFeeTooLow(uint256 targetFee);
+    /// @notice A non-constant fee template omitted a required field.
     error FeeConfigInvalid(FeeConfig feeConfig);
+    /// @notice Fee collection recipient was zero.
     error CollectFeesZeroAddress();
 
     /// @notice Send the contract's entire native balance to `to` (typically called by an owner-gated wrapper).
@@ -54,7 +56,10 @@ abstract contract InboxFeeManager {
         require(ok, "Inbox: fee transfer failed");
     }
 
-    function _localRequestExecutionBudget(uint256 totalFee) internal view returns (uint256) {
+    /// @notice Execution gas budget available to an incoming target call after reserving error-return bytes.
+    /// @param totalFee Stored target fee in gas units.
+    /// @return budget Gas units forwarded to the target subcall.
+    function _localRequestExecutionBudget(uint256 totalFee) internal view returns (uint256 budget) {
         if (localMinFeeConfig.constantFee > 0) {
             return totalFee;
         }
@@ -117,18 +122,10 @@ abstract contract InboxFeeManager {
         }
 
         uint256 gasPrice = tx.gasprice != 0 ? tx.gasprice : DEFAULT_GAS_PRICE;
-        console.log("gasPrice", gasPrice);
-        console.log("totalFeeLocalWei", totalFeeLocalWei);
-        console.log("callbackFeeLocalWei", callbackFeeLocalWei);
         callerGasLocalUnits = callbackFeeLocalWei / gasPrice;
-        console.log("callerGasLocalUnits", callerGasLocalUnits);
         uint256 remoteGasWei = totalFeeLocalWei - callbackFeeLocalWei;
-        console.log("remoteGasWei", remoteGasWei);
         targetGasRemoteUnits = Math.mulDiv(remoteGasWei / gasPrice, priceOracle.getLocalTokenPriceUSD(),
             priceOracle.getRemoteTokenPriceUSD());
-        console.log("targetGasRemoteUnits", targetGasRemoteUnits);
-        console.log("localTokenPriceUSD", priceOracle.getLocalTokenPriceUSD());
-        console.log("remoteTokenPriceUSD", priceOracle.getRemoteTokenPriceUSD());
 
         if (callerGasLocalUnits < expectedMinFee(dataSize, localMinFeeConfig)) {
             revert CallbackFeeTooLow(callerGasLocalUnits);
@@ -172,58 +169,34 @@ abstract contract InboxFeeManager {
         return gasUnits * (10000 + feeConfig.bufferRatioX10000) / 10000;
     }
 
-    /// @notice Off-chain / UI helper: rough native cost at `gasPrice` (return names are historical; not used for on-chain validation).
+    /// @notice Off-chain / UI helper: rough local-token wei cost at `gasPrice`.
     /// @param remoteMethodCallSize Remote calldata size term.
     /// @param callBackMethodCallSize Callback calldata size term.
     /// @param remoteMethodExecutionGas Remote execution gas term.
     /// @param callBackMethodExecutionGas Callback execution gas term.
     /// @param gasPrice Wei per gas assumption.
-    /// @return targetGasRemote Scaled remote-side estimate.
-    /// @return callerGasLocal Scaled callback-side estimate.
-    function calculateTwoWayFeeRequired(
-        uint256 remoteMethodCallSize,
-        uint256 callBackMethodCallSize,
-        uint256 remoteMethodExecutionGas,
-        uint256 callBackMethodExecutionGas,
-        uint256 gasPrice
-    ) public view returns (uint256 targetGasRemote, uint256 callerGasLocal) {
-        if (remoteMinFeeConfig.constantFee > 0) {
-            targetGasRemote = remoteMinFeeConfig.constantFee * gasPrice;
-        } else {
-            uint256 minRemoteGas = expectedMinFee(remoteMethodCallSize, remoteMinFeeConfig)
-                + remoteMethodExecutionGas * gasPrice;
-            targetGasRemote = (minRemoteGas + remoteMethodExecutionGas) * gasPrice;
-        }
-        if (localMinFeeConfig.constantFee > 0) {
-            callerGasLocal = localMinFeeConfig.constantFee * gasPrice;
-        } else {
-            uint256 minLocalGas = expectedMinFee(callBackMethodCallSize, localMinFeeConfig);
-            callerGasLocal = (minLocalGas + callBackMethodExecutionGas) * gasPrice;
-        }
-    }
-
-    /// @notice Off-chain / UI helper: rough native cost at `gasPrice` (return names are historical; not used for on-chain validation).
-    ///  and we use the oracle to estimate the tokens
-    /// @param remoteMethodCallSize Remote calldata size term.
-    /// @param callBackMethodCallSize Callback calldata size term.
-    /// @param remoteMethodExecutionGas Remote execution gas term.
-    /// @param callBackMethodExecutionGas Callback execution gas term.
-    /// @param gasPrice Wei per gas assumption.
-    /// @return targetGasRemote Scaled remote-side estimate.
-    /// @return callerGasLocal Scaled callback-side estimate.
+    /// @return targetFeeLocalWei Local-token wei estimated for the remote execution leg.
+    /// @return callerFeeLocalWei Local-token wei estimated for the callback leg.
     function calculateTwoWayFeeRequiredInLocalToken(
         uint256 remoteMethodCallSize,
         uint256 callBackMethodCallSize,
         uint256 remoteMethodExecutionGas,
         uint256 callBackMethodExecutionGas,
         uint256 gasPrice
-    ) external view returns (uint256 targetGasRemote, uint256 callerGasLocal) {
-        (uint256 targetGas, uint256 callerGas) = calculateTwoWayFeeRequired(
-            remoteMethodCallSize, callBackMethodCallSize, remoteMethodExecutionGas, callBackMethodExecutionGas, gasPrice);
+    ) external view returns (uint256 targetFeeLocalWei, uint256 callerFeeLocalWei) {
         uint256 localTokenPrice = priceOracle.getLocalTokenPriceUSD();
         uint256 remoteTokenPrice = priceOracle.getRemoteTokenPriceUSD();
-        uint256 targetGasInLocalToken = Math.mulDiv(targetGas, remoteTokenPrice, localTokenPrice);
-        uint256 callerGasInLocalToken = callerGas;
-        return (targetGasInLocalToken, callerGasInLocalToken);
+        uint256 targetGasRemoteUnits = expectedMinFee(remoteMethodCallSize, remoteMinFeeConfig)
+            + remoteMethodExecutionGas;
+        uint256 callerGasLocalUnits = expectedMinFee(callBackMethodCallSize, localMinFeeConfig)
+            + callBackMethodExecutionGas;
+        uint256 targetGasLocalUnits = Math.mulDiv(
+            targetGasRemoteUnits,
+            remoteTokenPrice,
+            localTokenPrice,
+            Math.Rounding.Ceil
+        );
+        targetFeeLocalWei = targetGasLocalUnits * gasPrice;
+        callerFeeLocalWei = callerGasLocalUnits * gasPrice;
     }
 }

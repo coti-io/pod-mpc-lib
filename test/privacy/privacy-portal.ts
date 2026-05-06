@@ -12,9 +12,11 @@ import {
   expectDepositMintSubmitted,
   expectWithdrawTransferSubmitted,
   fundUserAndApprovePortal,
+  markPTokenTransferSuccessful,
   requestWithdraw,
   seedPortalVault,
   setBurnSubmissionFailure,
+  triggerWithdrawalRelease,
   zeroAddress,
   type PortalTestContext,
 } from "./privacy-portal-utils.js";
@@ -64,6 +66,31 @@ describe("PrivacyPortal", { concurrency: 1 }, async function () {
     assert.equal(await ctx.portal.read.burnDebtAmount(), 0n);
   });
 
+  it("manual withdrawal trigger releases after pToken transfer succeeds", async function () {
+    ctx = await freshPortal();
+    await seedPortalVault(ctx, 500n);
+    const { withdrawalId } = await requestWithdraw(ctx, 300n);
+
+    const beforeRecipient = await ctx.underlying.read.balanceOf([ctx.recipient]);
+    await markPTokenTransferSuccessful(ctx);
+    await triggerWithdrawalRelease(ctx, withdrawalId);
+
+    assert.equal(await ctx.underlying.read.balanceOf([ctx.recipient]), beforeRecipient + 300n);
+    assert.equal(await ctx.pToken.read.burnedAmount(), 300n);
+    assert.equal(await ctx.portal.read.burnDebtAmount(), 0n);
+  });
+
+  it("manual withdrawal trigger rejects before pToken transfer succeeds", async function () {
+    ctx = await freshPortal();
+    await seedPortalVault(ctx, 500n);
+    const { withdrawalId } = await requestWithdraw(ctx, 300n);
+
+    await assert.rejects(
+      triggerWithdrawalRelease(ctx, withdrawalId),
+      /PTokenTransferNotSuccessful/
+    );
+  });
+
   it("records burn debt when burn submission fails and callback retry does not release twice", async function () {
     ctx = await freshPortal();
     await seedPortalVault(ctx, 500n);
@@ -72,7 +99,7 @@ describe("PrivacyPortal", { concurrency: 1 }, async function () {
 
     const beforeRecipient = await ctx.underlying.read.balanceOf([ctx.recipient]);
     await completePTokenTransferCallback(ctx);
-    await completePTokenTransferCallback(ctx);
+    await assert.rejects(completePTokenTransferCallback(ctx));
 
     assert.equal(await ctx.underlying.read.balanceOf([ctx.recipient]), beforeRecipient + 125n);
     assert.equal(await ctx.portal.read.burnDebtAmount(), 125n);

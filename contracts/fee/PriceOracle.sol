@@ -4,7 +4,7 @@ pragma solidity ^0.8.19;
 import "@openzeppelin/contracts/access/Ownable.sol";
 
 /// @title PriceOracle
-/// @notice Base oracle: cached 18-decimal USD-stable prices per wei, optional pull interval, and admin overrides.
+/// @notice Base oracle: cached 18-decimal USD-stable prices per wei, optional time-based pull interval, and admin overrides.
 /// @dev Subclasses override {fetchLocalTokenPriceUSD} / {fetchRemoteTokenPriceUSD} to refresh from feeds.
 contract PriceOracle is Ownable {
     /// @notice Price is stored with 18 decimals of precision
@@ -12,9 +12,6 @@ contract PriceOracle is Ownable {
 
     /// @notice Minimum seconds between successful pulls in {fetchPrices}. Zero disables the time gate.
     uint256 public fetchInterval;
-
-    /// @notice Block-interval gate for pulls (reserved; use with {fetchInterval} in derived contracts). Zero disables.
-    uint256 public fetchBlockInterval;
 
     /// @notice Timestamp of the last successful pull or admin set.
     uint256 public lastFetchTimestamp;
@@ -28,6 +25,7 @@ contract PriceOracle is Ownable {
     /// @notice Address allowed to set prices directly (in addition to {fetchPrices}).
     address public priceAdmin;
 
+    /// @notice Caller is not the configured price admin.
     error NotPriceAdmin();
 
     /// @dev Reverts unless `msg.sender` is {priceAdmin}.
@@ -59,12 +57,6 @@ contract PriceOracle is Ownable {
     /// @param secondsBetweenFetches New interval (0 = off).
     function setFetchInterval(uint256 secondsBetweenFetches) external onlyOwner {
         fetchInterval = secondsBetweenFetches;
-    }
-
-    /// @notice Minimum blocks between pulls (for future use with the time gate).
-    /// @param blocksBetweenFetches New interval (0 = off).
-    function setFetchBlockInterval(uint256 blocksBetweenFetches) external onlyOwner {
-        fetchBlockInterval = blocksBetweenFetches;
     }
 
     /// @notice Set the address allowed to call {setLocalTokenPriceUSD} / {setRemoteTokenPriceUSD}.

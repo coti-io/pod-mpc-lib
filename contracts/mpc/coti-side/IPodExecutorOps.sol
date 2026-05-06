@@ -10,7 +10,10 @@ import "@coti-io/coti-contracts/contracts/utils/mpc/MpcCore.sol";
 interface IPodExecutor64 {
     function add64(gtUint64 a, gtUint64 b, address cOwner) external;
     function sub64(gtUint64 a, gtUint64 b, address cOwner) external;
+    /// @notice Checked multiplication. Reverts when the true product does not fit in uint64.
     function mul64(gtUint64 a, gtUint64 b, address cOwner) external;
+    /// @notice Wrapping multiplication modulo 2^64. Use only when modulo arithmetic is an explicit invariant.
+    function mulWrapping64(gtUint64 a, gtUint64 b, address cOwner) external;
     function div64(gtUint64 a, gtUint64 b, address cOwner) external;
     function rem64(gtUint64 a, gtUint64 b, address cOwner) external;
     function and64(gtUint64 a, gtUint64 b, address cOwner) external;
@@ -39,7 +42,10 @@ interface IPodExecutor64 {
 interface IPodExecutor128 {
     function add128(gtUint128 memory a, gtUint128 memory b, address cOwner) external;
     function sub128(gtUint128 memory a, gtUint128 memory b, address cOwner) external;
+    /// @notice Checked multiplication. Reverts when the true product does not fit in uint128.
     function mul128(gtUint128 memory a, gtUint128 memory b, address cOwner) external;
+    /// @notice Wrapping multiplication modulo 2^128. Use only when modulo arithmetic is an explicit invariant.
+    function mulWrapping128(gtUint128 memory a, gtUint128 memory b, address cOwner) external;
     function and128(gtUint128 memory a, gtUint128 memory b, address cOwner) external;
     function or128(gtUint128 memory a, gtUint128 memory b, address cOwner) external;
     function xor128(gtUint128 memory a, gtUint128 memory b, address cOwner) external;
@@ -66,7 +72,10 @@ interface IPodExecutor128 {
 interface IPodExecutor256 {
     function add256(gtUint256 memory a, gtUint256 memory b, address cOwner) external;
     function sub256(gtUint256 memory a, gtUint256 memory b, address cOwner) external;
+    /// @notice Checked multiplication. Reverts when the true product does not fit in uint256.
     function mul256(gtUint256 memory a, gtUint256 memory b, address cOwner) external;
+    /// @notice Wrapping multiplication modulo 2^256. Use only when modulo arithmetic is an explicit invariant.
+    function mulWrapping256(gtUint256 memory a, gtUint256 memory b, address cOwner) external;
     function and256(gtUint256 memory a, gtUint256 memory b, address cOwner) external;
     function or256(gtUint256 memory a, gtUint256 memory b, address cOwner) external;
     function xor256(gtUint256 memory a, gtUint256 memory b, address cOwner) external;

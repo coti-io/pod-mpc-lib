@@ -49,6 +49,19 @@ abstract contract PodLib128 is PodLibBase {
         return _sendThree128(IPodExecutor128.mul128.selector, a, b, cOwner, callbackSelector, errorSelector, totalValueWei, callbackFeeLocalWei);
     }
 
+    /// @notice Wrapping multiply modulo 2^128. Use only when downstream logic is defined over uint128 modular arithmetic.
+    function mulWrapping128(
+        itUint128 memory a,
+        itUint128 memory b,
+        address cOwner,
+        bytes4 callbackSelector,
+        bytes4 errorSelector,
+        uint256 totalValueWei,
+        uint256 callbackFeeLocalWei
+    ) internal returns (bytes32) {
+        return _sendThree128(IPodExecutor128.mulWrapping128.selector, a, b, cOwner, callbackSelector, errorSelector, totalValueWei, callbackFeeLocalWei);
+    }
+
     function and128(
         itUint128 memory a,
         itUint128 memory b,
@@ -205,7 +218,7 @@ abstract contract PodLib128 is PodLibBase {
         itUint128 memory a,
         itUint128 memory b,
         address cOwner
-    ) private view returns (IInbox.MpcMethodCall memory) {
+    ) private pure returns (IInbox.MpcMethodCall memory) {
         return MpcAbiCodec.create(IPodExecutor128.mux128.selector, 4)
             .addArgument(bit)
             .addArgument(a)
@@ -273,13 +286,13 @@ abstract contract PodLib128 is PodLibBase {
         );
     }
 
-    function _buildMpcRand128(address cOwner) private view returns (IInbox.MpcMethodCall memory) {
+    function _buildMpcRand128(address cOwner) private pure returns (IInbox.MpcMethodCall memory) {
         return MpcAbiCodec.create(IPodExecutor128.rand128.selector, 1).addArgument(cOwner).build();
     }
 
     function _buildMpcRandBoundedBits128(uint8 numBits, address cOwner)
         private
-        view
+        pure
         returns (IInbox.MpcMethodCall memory)
     {
         return MpcAbiCodec.create(IPodExecutor128.randBoundedBits128.selector, 2)
@@ -290,7 +303,7 @@ abstract contract PodLib128 is PodLibBase {
 
     function _buildMpcThree128(bytes4 selector, itUint128 memory a, itUint128 memory b, address cOwner)
         private
-        view
+        pure
         returns (IInbox.MpcMethodCall memory)
     {
         return MpcAbiCodec.create(selector, 3).addArgument(a).addArgument(b).addArgument(cOwner).build();
@@ -298,7 +311,7 @@ abstract contract PodLib128 is PodLibBase {
 
     function _buildMpcShift128(bytes4 selector, itUint128 memory a, uint8 s, address cOwner)
         private
-        view
+        pure
         returns (IInbox.MpcMethodCall memory)
     {
         return MpcAbiCodec.create(selector, 3)

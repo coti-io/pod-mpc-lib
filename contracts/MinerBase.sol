@@ -8,9 +8,12 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 contract MinerBase is Ownable {
     mapping(address => bool) private _miners;
 
+    /// @notice Miner address was registered by the owner.
     event MinerAdded(address miner);
+    /// @notice Miner address was revoked by the owner.
     event MinerRemoved(address miner);
 
+    /// @notice Restrict a function to registered miners.
     /// @dev Reverts unless `msg.sender` is a registered miner.
     modifier onlyMiner() {
         require(_miners[msg.sender], "MinerBase: caller is not a miner");

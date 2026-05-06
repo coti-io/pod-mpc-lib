@@ -24,7 +24,8 @@ contract InboxMiner is InboxBase, MinerBase, IInboxMiner {
         for (uint256 i = 0; i < mined.length; i++) {
             MinedRequest memory minedRequest = mined[i];
             bytes32 requestId = minedRequest.requestId;
-            (, uint256 minedNonce) = _unpackRequestId(requestId);
+            (uint256 minedChainId, uint256 minedNonce) = _unpackRequestId(requestId);
+            require(minedChainId == sourceChainId, "Inbox: requestId source chain mismatch");
             require(minedNonce == allowedNonce, "Inbox: mined nonces must be contiguous");
             allowedNonce++;
             Request storage incomingRequest = incomingRequests[requestId];

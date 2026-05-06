@@ -28,10 +28,15 @@ contract PodErc20CotiSide is IPodErc20CotiSide, InboxUser, Ownable {
 
     // --- Events ---
 
+    /// @notice Trusted source-chain pToken peer was updated.
     event AuthorizedRemoteUpdated(uint256 indexed chainId, address indexed remoteContract);
+    /// @notice Clone or constructor initialization completed.
     event CotiSideInitialized(address indexed inbox, address indexed owner);
+    /// @notice Owner minted public amount into a COTI-side balance.
     event OwnerMinted(address indexed to, uint256 amount, uint256 newNonce);
+    /// @notice Balance ciphertexts were returned to the PoD side.
     event SyncBalancesResponded(address[] accounts, uint256 nonce);
+    /// @notice Transfer path completed; `publicAmount` is populated only for public-amount flows.
     event TransferCompleted(
         address indexed spender,
         address indexed from,
@@ -41,20 +46,32 @@ contract PodErc20CotiSide is IPodErc20CotiSide, InboxUser, Ownable {
         uint256 publicAmount,
         uint256 nonce
     );
+    /// @notice Burn path completed; `publicAmount` is populated only for public-amount flows.
     event BurnCompleted(address indexed from, bool amountIsPublic, uint256 publicAmount, uint256 nonce);
+    /// @notice Mint path completed; `publicAmount` is populated only for public-amount flows.
     event MintCompleted(address indexed to, bool amountIsPublic, uint256 publicAmount, uint256 nonce);
+    /// @notice Approval path completed; `publicAmount` is populated only for public-amount flows.
     event ApprovalCompleted(address indexed owner, address indexed spender, bool amountIsPublic, uint256 publicAmount);
+    /// @notice Transfer failure was reported back to the PoD side.
     event TransferFailureRaised(address indexed from, address indexed to, bytes reason);
+    /// @notice Approval failure was reported back to the PoD side.
     event ApprovalFailureRaised(address indexed owner, address indexed spender, bytes reason);
+    /// @notice Balance-sync failure was reported back to the PoD side.
     event SyncBalancesFailureRaised(bytes reason);
 
     // --- Errors ---
 
+    /// @notice Authorized PoD-side peer has not been configured.
     error TrustedRemoteNotConfigured();
+    /// @notice Authorized PoD-side peer chain or contract is zero.
     error InvalidAuthorizedRemotePeer();
+    /// @notice Active inbox message did not originate from the authorized peer.
     error UntrustedRemoteCaller(uint256 chainId, address remoteContract);
+    /// @notice Owner mint recipient was zero.
     error MintToZeroAddress();
+    /// @notice Clone storage was already initialized.
     error PodErc20CotiSideAlreadyInitialized();
+    /// @notice Initializer received an invalid inbox or owner address.
     error PodErc20CotiSideInvalidInitialization();
 
     // --- Modifiers ---
@@ -76,6 +93,8 @@ contract PodErc20CotiSide is IPodErc20CotiSide, InboxUser, Ownable {
 
     // --- Constructor ---
 
+    /// @param inboxAddress COTI-side inbox allowed to deliver remote pToken requests.
+    /// @param initialOwner Owner allowed to configure the authorized source peer.
     constructor(address inboxAddress, address initialOwner) Ownable(initialOwner) {
         _initializePodErc20CotiSide(inboxAddress, initialOwner);
     }
@@ -95,6 +114,9 @@ contract PodErc20CotiSide is IPodErc20CotiSide, InboxUser, Ownable {
         emit AuthorizedRemoteUpdated(chainId, remotePodToken);
     }
 
+    /// @notice Initialize shared constructor/clone storage.
+    /// @param inboxAddress COTI-side inbox allowed to deliver remote pToken requests.
+    /// @param initialOwner Owner allowed to configure the authorized source peer.
     function _initializePodErc20CotiSide(address inboxAddress, address initialOwner) internal {
         if (_cotiSideInitialized) {
             revert PodErc20CotiSideAlreadyInitialized();

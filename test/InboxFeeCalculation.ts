@@ -391,12 +391,6 @@ describe(
     }
     );
 
-    /**
-     * `calculateTwoWayFeeRequired` uses `callBackMethodCallSize` / `callBackMethodExecutionGas` for the
-     * callback leg; with `remoteMinFeeConfig.constantFee > 0` the remote leg is `constantFee * gasPrice`
-     * (remote size/exec args are ignored for that branch — avoids the broken non-constant remote formula
-     * that mixes gas units and wei in `InboxFeeManager`).
-     */
     it(
       "calculateTwoWayFeeRequiredInLocalToken (dataSize 20, exec gas 200k): tx fees match helper (ETH local / COTI remote)",
       { timeout: 300_000 },
@@ -422,35 +416,23 @@ describe(
           EXEC_GAS,
           gp,
         ]);
-        const [targetRaw, callerRaw] = await inbox.read.calculateTwoWayFeeRequired([
-          DATA_SIZE_HINT,
-          DATA_SIZE_HINT,
-          EXEC_GAS,
-          EXEC_GAS,
-          gp,
-        ]);
-        const expectedTargetScaled =
-          (targetRaw * remoteTokenPriceUSDX128) / localTokenPriceUSDX128;
-        assert.equal(
-          targetWeiEst,
-          expectedTargetScaled,
-          "inLocalToken target = calculateTwoWayFeeRequired targetWei * remoteTokenPrice / localTokenPrice"
-        );
-        assert.equal(callerWeiEst, callerRaw, "caller leg already in local wei");
 
         const minLocalGasForHint = expectedTemplateMinGasUnits(DATA_SIZE_HINT, LOCAL_TEMPLATE);
+        const remoteGasRequired = REMOTE_MIN_GAS_UNITS + EXEC_GAS;
+        const targetGasLocalUnits =
+          (remoteGasRequired * remoteTokenPriceUSDX128 + localTokenPriceUSDX128 - 1n) /
+          localTokenPriceUSDX128;
         const expectedCallerWei = (minLocalGasForHint + EXEC_GAS) * gp;
-        const expectedTargetWei =
-          (REMOTE_MIN_GAS_UNITS * gp * remoteTokenPriceUSDX128) / localTokenPriceUSDX128;
+        const expectedTargetWei = targetGasLocalUnits * gp;
         assert.equal(callerWeiEst, expectedCallerWei, "local leg = (expectedMinFee(20) + 200k exec gas) * gasPrice");
-        assert.equal(targetWeiEst, expectedTargetWei, "remote leg in local wei = 18M gas @ gp scaled by oracle ratio");
+        assert.equal(targetWeiEst, expectedTargetWei, "remote leg in local wei = (remote min + exec gas) scaled by oracle ratio");
 
         logStep(
           `calculateTwoWayFeeRequiredInLocalToken(${DATA_SIZE_HINT}, ${DATA_SIZE_HINT}, ${EXEC_GAS}, ${EXEC_GAS}, gp) → ` +
             `targetWei=${targetWeiEst} callerWei=${callerWeiEst}`
         );
         logStep(
-          `expected from templates: targetWei=${expectedTargetWei} (= ${REMOTE_MIN_GAS_UNITS} gas @ gp × remote/local), ` +
+          `expected from templates: targetWei=${expectedTargetWei} (= ${remoteGasRequired} gas @ gp × remote/local), ` +
             `callerWei=${expectedCallerWei} (= (${minLocalGasForHint} + ${EXEC_GAS}) gas @ gp)`
         );
 
@@ -466,14 +448,7 @@ describe(
           "caller budget from size-20 hint covers template min for actual minimal payload"
         );
 
-        // `targetWeiEst` from the view can be 1 wei low vs `ceil(18M * gp * remote/local)` after integer division;
-        // on-chain requires enough remote wei that `(remoteWei * local / remote) / gp >= REMOTE_MIN_GAS_UNITS`.
-        const minRemoteWei =
-          (REMOTE_MIN_GAS_UNITS * gp * remoteTokenPriceUSDX128 + localTokenPriceUSDX128 - 1n) /
-          localTokenPriceUSDX128;
-        const targetRemoteWeiPaid =
-          targetWeiEst >= minRemoteWei ? targetWeiEst : minRemoteWei;
-        const totalWei = targetRemoteWeiPaid + callerWeiEst;
+        const totalWei = targetWeiEst + callerWeiEst;
 
         const txHash = await inbox.write.sendTwoWayMessage(
           [
@@ -499,7 +474,7 @@ describe(
         const req = await getRequestParsed(inbox, batch[0].requestId as `0x${string}`);
 
         const expectedCallerGas = callerWeiEst / gpMined;
-        const remoteWeiLocal = totalWei - callerWeiEst; // equals targetRemoteWeiPaid
+        const remoteWeiLocal = totalWei - callerWeiEst;
         // On-chain: targetGasRemoteUnits = (remoteWei * localPrice / remotePrice) / gasPrice — not remoteWei/gp alone.
         const expectedTargetGas =
           (remoteWeiLocal * localTokenPriceUSDX128) / remoteTokenPriceUSDX128 / gpMined;
@@ -508,7 +483,7 @@ describe(
 
         assert.equal(req.targetFee, expectedTargetGas);
         assert.equal(req.callerFee, expectedCallerGas);
-        assert.equal(req.targetFee, REMOTE_MIN_GAS_UNITS, "oracle ratio cancels scaled local wei → same remote gas units as 1:1");
+        assert.ok(req.targetFee >= REMOTE_MIN_GAS_UNITS, "remote gas units must satisfy remote constant min");
         assert.equal(req.callerFee, minLocalGasForHint + EXEC_GAS);
       }
     );
