@@ -7,24 +7,41 @@ pragma solidity ^0.8.19;
 interface IInbox {
     // --- Types ---
 
+    /// @notice Encoded method call and optional MPC ABI metadata.
     struct MpcMethodCall {
+        /// @notice Function selector to re-encode with MPC GTs; zero means `data` is raw calldata.
         bytes4 selector;
+        /// @notice ABI-encoded arguments or raw calldata.
         bytes data;
+        /// @notice MPC datatype descriptors used by {MpcAbiCodec}.
         bytes8[] datatypes;
+        /// @notice MPC ciphertext length descriptors used by {MpcAbiCodec}.
         bytes32[] datalens;
     }
 
+    /// @notice Stored outbound or incoming cross-chain request.
     struct Request {
+        /// @notice Packed request id containing source chain id and nonce.
         bytes32 requestId;
+        /// @notice Destination chain id for outbound requests, or source chain id for incoming requests.
         uint256 targetChainId;
+        /// @notice Contract invoked on the destination/current chain.
         address targetContract;
+        /// @notice Method call executed on the target.
         MpcMethodCall methodCall;
+        /// @notice Immediate caller that submitted the request.
         address callerContract;
+        /// @notice Application contract that should receive responses/errors.
         address originalSender;
+        /// @notice Request creation or ingestion timestamp.
         uint64 timestamp;
+        /// @notice Callback selector used for two-way success responses.
         bytes4 callbackSelector;
+        /// @notice Error selector used for failed execution responses.
         bytes4 errorSelector;
+        /// @notice True when a success response is expected.
         bool isTwoWay;
+        /// @notice True after an incoming request or linked response has been processed.
         bool executed;
         /// @dev If this request is a one-way response or error delivery, links to the original two-way request ID.
         bytes32 sourceRequestId;
@@ -34,20 +51,31 @@ interface IInbox {
         uint256 callerFee;
     }
 
+    /// @notice Response metadata for an incoming request.
     struct Response {
+        /// @notice Outbound request id that delivered the response.
         bytes32 responseRequestId;
+        /// @notice Response payload returned by the target contract.
         bytes response;
     }
 
+    /// @notice Stored execution or encoding error for a request.
     struct Error {
+        /// @notice Request id that failed.
         bytes32 requestId;
+        /// @notice Protocol-defined error code.
         uint64 errorCode;
+        /// @notice Revert data or encoded error message.
         bytes errorMessage;
     }
 
+    /// @notice Active incoming execution context exposed to target contracts.
     struct ExecutionContext {
+        /// @notice Remote chain that sent the current request.
         uint256 remoteChainId;
+        /// @notice Remote contract that sent the current request.
         address remoteContract;
+        /// @notice Current incoming request id.
         bytes32 requestId;
     }
 

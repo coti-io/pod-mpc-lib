@@ -6,8 +6,16 @@ import "@coti-io/coti-contracts/contracts/utils/mpc/MpcCore.sol";
 /// @title IPodERC20
 /// @notice Async private ERC-20: `ctUint256` balances/allowances; moves use `itUint256` and inbox + COTI settlement.
 /// @dev Not IERC20-compatible: mutating calls return `requestId`; only the configured COTI peer may complete callbacks.
+///      Plain `uint256` methods expose amounts in calldata and events; use encrypted `itUint256` methods for privacy-sensitive flows.
 interface IPodERC20 {
     // --- Types ---
+
+    enum RequestStatus {
+        None,
+        Pending,
+        Success,
+        Failed
+    }
 
     /// @notice Allowance represented twice: re-encrypted for the owner and for the spender so each party can decrypt their view.
     struct Allowance {
@@ -70,6 +78,9 @@ interface IPodERC20 {
     /// @notice `syncBalances` refreshed `account` from the COTI ledger when the monotonic `nonce` allowed it.
     event BalanceSynced(address account, ctUint256 amount);
 
+    /// @notice Lifecycle transition for an async inbox request submitted by this token.
+    event RequestStatusUpdated(bytes32 indexed requestId, RequestStatus status);
+
     // --- Token metadata & supply ---
 
     /**
@@ -77,6 +88,9 @@ interface IPodERC20 {
      * @dev Implementations may always return `0` to hide supply on-chain while the authoritative ledger lives on COTI.
      */
     function totalSupply() external view returns (uint256);
+
+    /// @notice Status of an async request submitted by this token.
+    function requests(bytes32 requestId) external view returns (RequestStatus);
 
     // --- Balances ---
 
@@ -99,8 +113,8 @@ interface IPodERC20 {
      * @return requestId Inbox request id; completion is asynchronous via {Transfer} or {TransferFailed}.
      * @dev **Gotcha:** reverts if either the sender or `to` already has a pending transfer. **Gotcha:** concurrent approvals use a
      *      separate pending map and do not block transfers unless your deployment couples them elsewhere.
+     * @param callbackFeeLocalWei Caller-estimated wei slice for the callback leg; total payment is `msg.value`.
      */
-    /// @param callbackFeeLocalWei Caller-estimated wei slice for the callback leg; total payment is `msg.value`.
     function transfer(address to, itUint256 calldata value, uint256 callbackFeeLocalWei) external payable returns (bytes32 requestId);
 
     /**

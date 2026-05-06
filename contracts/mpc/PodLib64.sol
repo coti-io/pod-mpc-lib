@@ -61,6 +61,19 @@ abstract contract PodLib64 is PodLibBase {
         return _sendThree(IPodExecutor64.mul64.selector, a, b, cOwner, callbackSelector, errorSelector, totalValueWei, callbackFeeLocalWei);
     }
 
+    /// @notice Wrapping multiply modulo 2^64. Use only when downstream logic is defined over uint64 modular arithmetic.
+    function mulWrapping64(
+        itUint64 memory a,
+        itUint64 memory b,
+        address cOwner,
+        bytes4 callbackSelector,
+        bytes4 errorSelector,
+        uint256 totalValueWei,
+        uint256 callbackFeeLocalWei
+    ) internal returns (bytes32) {
+        return _sendThree(IPodExecutor64.mulWrapping64.selector, a, b, cOwner, callbackSelector, errorSelector, totalValueWei, callbackFeeLocalWei);
+    }
+
     function div64(
         itUint64 memory a,
         itUint64 memory b,
@@ -229,7 +242,7 @@ abstract contract PodLib64 is PodLibBase {
         itUint64 memory a,
         itUint64 memory b,
         address cOwner
-    ) private view returns (IInbox.MpcMethodCall memory) {
+    ) private pure returns (IInbox.MpcMethodCall memory) {
         return MpcAbiCodec.create(IPodExecutor64.mux64.selector, 4)
             .addArgument(bit)
             .addArgument(a)
@@ -279,7 +292,7 @@ abstract contract PodLib64 is PodLibBase {
         );
     }
 
-    function _buildMpcRand64(address cOwner) private view returns (IInbox.MpcMethodCall memory) {
+    function _buildMpcRand64(address cOwner) private pure returns (IInbox.MpcMethodCall memory) {
         return MpcAbiCodec.create(IPodExecutor64.rand64.selector, 1).addArgument(cOwner).build();
     }
 
@@ -303,7 +316,7 @@ abstract contract PodLib64 is PodLibBase {
 
     function _buildMpcRandBoundedBits64(uint8 numBits, address cOwner)
         private
-        view
+        pure
         returns (IInbox.MpcMethodCall memory)
     {
         return MpcAbiCodec.create(IPodExecutor64.randBoundedBits64.selector, 2)
@@ -314,7 +327,7 @@ abstract contract PodLib64 is PodLibBase {
 
     function _buildMpcThree64(bytes4 selector, itUint64 memory a, itUint64 memory b, address cOwner)
         private
-        view
+        pure
         returns (IInbox.MpcMethodCall memory)
     {
         return MpcAbiCodec.create(selector, 3).addArgument(a).addArgument(b).addArgument(cOwner).build();
@@ -322,7 +335,7 @@ abstract contract PodLib64 is PodLibBase {
 
     function _buildMpcShift64(bytes4 selector, itUint64 memory a, uint8 s, address cOwner)
         private
-        view
+        pure
         returns (IInbox.MpcMethodCall memory)
     {
         return MpcAbiCodec.create(selector, 3)

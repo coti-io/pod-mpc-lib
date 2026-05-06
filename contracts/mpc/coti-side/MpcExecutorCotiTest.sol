@@ -22,11 +22,17 @@ contract MpcExecutorCotiTest {
         inboxContract = _inbox;
     }
 
-    // --- `MpcExecutor` paths (proxy forwards `mul*FromPlain` so `setPublic` + `mul` run in executor; see `MpcExecutor` natspec) ---
+    // --- `MpcExecutor` paths (proxy forwards plain-input multiply so `setPublic` + multiply run in executor; see `MpcExecutor` natspec) ---
 
     /// @notice `cOwner` should be the test wallet (MPC user ciphertext owner).
     function executorMul256PublicPlain(uint256 a, uint256 b, address cOwner) external {
         inboxContract.forwardMul256FromPlain(a, b, cOwner);
+        ctUint256 memory uc = abi.decode(inboxContract.lastRespondData(), (ctUint256));
+        lastPlain256 = MpcCore.decrypt(MpcCore.onBoard(uc));
+    }
+
+    function executorMulWrapping256PublicPlain(uint256 a, uint256 b, address cOwner) external {
+        inboxContract.forwardMulWrapping256FromPlain(a, b, cOwner);
         ctUint256 memory uc = abi.decode(inboxContract.lastRespondData(), (ctUint256));
         lastPlain256 = MpcCore.decrypt(MpcCore.onBoard(uc));
     }
@@ -37,8 +43,20 @@ contract MpcExecutorCotiTest {
         lastPlain128 = MpcCore.decrypt(MpcCore.onBoard(uc));
     }
 
+    function executorMulWrapping128PublicPlain(uint128 a, uint128 b, address cOwner) external {
+        inboxContract.forwardMulWrapping128FromPlain(a, b, cOwner);
+        ctUint128 memory uc = abi.decode(inboxContract.lastRespondData(), (ctUint128));
+        lastPlain128 = MpcCore.decrypt(MpcCore.onBoard(uc));
+    }
+
     function executorMul64PublicPlain(uint64 a, uint64 b, address cOwner) external {
         inboxContract.forwardMul64FromPlain(a, b, cOwner);
+        ctUint64 uc = abi.decode(inboxContract.lastRespondData(), (ctUint64));
+        lastPlain64 = MpcCore.decrypt(MpcCore.onBoard(uc));
+    }
+
+    function executorMulWrapping64PublicPlain(uint64 a, uint64 b, address cOwner) external {
+        inboxContract.forwardMulWrapping64FromPlain(a, b, cOwner);
         ctUint64 uc = abi.decode(inboxContract.lastRespondData(), (ctUint64));
         lastPlain64 = MpcCore.decrypt(MpcCore.onBoard(uc));
     }
@@ -62,6 +80,14 @@ contract MpcExecutorCotiTest {
     }
 
     function mul128PublicPlain(uint128 a, uint128 b) external returns (uint128 r) {
+        gtUint128 memory ga = MpcCore.setPublic128(a);
+        gtUint128 memory gb = MpcCore.setPublic128(b);
+        gtUint128 memory gr = MpcCore.checkedMul(ga, gb);
+        r = MpcCore.decrypt(gr);
+        lastPlain128 = r;
+    }
+
+    function mulWrapping128PublicPlain(uint128 a, uint128 b) external returns (uint128 r) {
         gtUint128 memory ga = MpcCore.setPublic128(a);
         gtUint128 memory gb = MpcCore.setPublic128(b);
         gtUint128 memory gr = MpcCore.mul(ga, gb);

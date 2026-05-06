@@ -21,6 +21,7 @@ interface IUniswapV2Pair {
 /// **Decimals:** `R_base` and `R_quote` are pair reserves in token minimal units; the returned value is quote-per-base scaled by `1e18`.
 /// Ratios used in fee math (local vs remote) cancel absolute quote scaling when both pairs share the same quote asset.
 contract UniswapPriceOracle is PriceOracle {
+    /// @notice The selected base-token side of a V2 pair has zero reserves, so no price can be computed.
     error UniswapPriceOracleZeroReserves();
 
     IUniswapV2Pair public immutable localPair;
@@ -38,22 +39,19 @@ contract UniswapPriceOracle is PriceOracle {
     /// @param _localTokenIsToken0 Whether the local base is `token0` in `_localPair`.
     /// @param _remoteTokenIsToken0 Whether the remote base is `token0` in `_remotePair`.
     /// @param _fetchIntervalSeconds Minimum seconds between pulls (0 = no time gate).
-    /// @param _fetchIntervalBlocks Minimum blocks between pulls (0 = no block gate).
     constructor(
         address initialOwner,
         IUniswapV2Pair _localPair,
         IUniswapV2Pair _remotePair,
         bool _localTokenIsToken0,
         bool _remoteTokenIsToken0,
-        uint256 _fetchIntervalSeconds,
-        uint256 _fetchIntervalBlocks
+        uint256 _fetchIntervalSeconds
     ) PriceOracle(initialOwner) {
         localPair = _localPair;
         remotePair = _remotePair;
         localTokenIsToken0 = _localTokenIsToken0;
         remoteTokenIsToken0 = _remoteTokenIsToken0;
         fetchInterval = _fetchIntervalSeconds;
-        fetchBlockInterval = _fetchIntervalBlocks;
     }
 
     /// @dev Overrides parent to read spot price from {localPair}.

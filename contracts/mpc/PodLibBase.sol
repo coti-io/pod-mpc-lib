@@ -18,6 +18,8 @@ abstract contract PodLibBase is PodUser {
     /// @dev Minimum callback slice in wei; inbox applies stricter policy from {InboxFeeManager}.
     uint256 internal constant MIN_CALLBACK_FEE_WEI = 1;
 
+    /// @notice Accept native funds that can subsidize future inbox fees paid by inherited Pod helper methods.
+    /// @dev `_sendTwoWayWithFee` checks contract balance, so callers may pre-fund a Pod app and later spend that balance.
     receive() external payable {}
 
     /// @param totalValueWei Total native payment forwarded to `sendTwoWayMessage` (e.g. `msg.value`).

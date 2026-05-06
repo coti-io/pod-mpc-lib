@@ -5,8 +5,6 @@ import "./fee/InboxFeeManager.sol";
 import "./IInbox.sol";
 import "./mpccodec/MpcAbiCodec.sol";
 
-import "hardhat/console.sol";
-
 /// @title InboxBase
 /// @notice Core inbox: outbound requests, inbound execution context, responses, errors, and MPC calldata encoding.
 /// @dev Mixed with {InboxFeeManager}. Subcontracts add miner and ownership behavior.
@@ -14,10 +12,15 @@ contract InboxBase is IInbox, InboxFeeManager {
     /// @notice This chain's ID (deploy-time; may differ from `block.chainid` when `_chainId` is non-zero).
     uint256 public chainId;
 
+    /// @notice Outbound requests by request id.
     mapping(bytes32 => Request) public requests;
+    /// @notice Responses sent for incoming request ids.
     mapping(bytes32 => Response) public inboxResponses;
+    /// @notice Execution or encoding errors by request id.
     mapping(bytes32 => Error) public errors;
+    /// @notice Incoming requests mined from remote chains.
     mapping(bytes32 => Request) public incomingRequests;
+    /// @notice Last contiguous incoming request id processed for each source chain.
     mapping(uint256 => bytes32) public lastIncomingRequestId;
 
     ExecutionContext internal _currentContext;
@@ -26,6 +29,7 @@ contract InboxBase is IInbox, InboxFeeManager {
     uint64 internal constant ERROR_CODE_EXECUTION_FAILED = 1;
     uint64 internal constant ERROR_CODE_ENCODE_FAILED = 2;
 
+    /// @notice Outbound cross-chain request was created.
     event MessageSent(
         bytes32 indexed requestId,
         uint256 indexed targetChainId,
@@ -35,6 +39,7 @@ contract InboxBase is IInbox, InboxFeeManager {
         bytes4 errorSelector
     );
 
+    /// @notice Incoming cross-chain request was accepted for execution.
     event MessageReceived(
         bytes32 indexed requestId,
         uint256 indexed sourceChainId,
@@ -42,12 +47,16 @@ contract InboxBase is IInbox, InboxFeeManager {
         MpcMethodCall methodCall
     );
 
+    /// @notice Target replied to an incoming request and a response request was created.
     event ResponseReceived(bytes32 indexed requestId, bytes response);
 
+    /// @notice Target raised an application error for an incoming request.
     event RaiseReceived(bytes32 indexed incomingRequestId, bytes errorPayload);
 
+    /// @notice One-way incoming response/error was linked to its original outbound request.
     event IncomingResponseReceived(bytes32 indexed requestId, bytes32 indexed sourceRequestId);
 
+    /// @notice Request execution or encoding failed.
     event ErrorReceived(bytes32 indexed requestId, uint64 errorCode, bytes errorMessage);
 
     /// @notice Emitted after executing an incoming request. Values are gas units (same basis as `Request.targetFee`).
@@ -72,8 +81,6 @@ contract InboxBase is IInbox, InboxFeeManager {
         uint256 dataSize = abi.encode(methodCall).length;
         (uint256 targetFeeGas, uint256 callerFeeGas) =
             validateAndPrepareTwoWayFees(dataSize, msg.value, callbackFeeLocalWei);
-        console.log("targetFeeGas", targetFeeGas);
-        console.log("callerFeeGas", callerFeeGas);
         requestId = _sendTwoWayMessage(
             targetChainId, targetContract, methodCall, callbackSelector, errorSelector, targetFeeGas, callerFeeGas
         );
@@ -103,6 +110,7 @@ contract InboxBase is IInbox, InboxFeeManager {
 
         Request storage incomingRequest = incomingRequests[incomingRequestId];
         require(incomingRequest.requestId != bytes32(0), "Inbox: request not found");
+        require(msg.sender == incomingRequest.targetContract, "Inbox: only target can reply");
 
         MpcMethodCall memory responseMethodCall = MpcMethodCall({
             selector: bytes4(0),
@@ -139,6 +147,7 @@ contract InboxBase is IInbox, InboxFeeManager {
 
         Request storage incomingRequest = incomingRequests[incomingRequestId];
         require(incomingRequest.requestId != bytes32(0), "Inbox: request not found");
+        require(msg.sender == incomingRequest.targetContract, "Inbox: only target can reply");
         require(incomingRequest.errorSelector != bytes4(0), "Inbox: no error handler");
 
         MpcMethodCall memory errorMethodCall = MpcMethodCall({

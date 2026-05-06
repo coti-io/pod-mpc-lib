@@ -15,11 +15,13 @@ contract PodErc20Mintable is PodERC20 {
 
     /// @notice Thrown when a non-minter tries to mint; carries the caller for debugging.
     error OnlyMinter(address caller);
+    /// @notice Mintable storage was already initialized.
     error PodErc20MintableAlreadyInitialized();
+    /// @notice Minter was the zero address.
     error PodErc20MintableInvalidMinter();
 
     /**
-     * @param _minter Address authorized to mint; zero is accepted but effectively disables mint forever.
+     * @param _minter Address authorized to mint; must not be zero.
      * @param _cotiChainId See {PodERC20}.
      * @param _inbox See {PodERC20}.
      * @param _cotiSideContract See {PodERC20}.
@@ -45,6 +47,7 @@ contract PodErc20Mintable is PodERC20 {
         }
     }
 
+    /// @notice Initialize mintable token storage with default 18 decimals.
     function _initializePodErc20Mintable(
         address _minter,
         uint256 _cotiChainId,
@@ -56,6 +59,7 @@ contract PodErc20Mintable is PodERC20 {
         _initializePodErc20Mintable(_minter, _cotiChainId, _inbox, _cotiSideContract, _name, _symbol, 18);
     }
 
+    /// @notice Initialize mintable token storage with explicit decimals.
     function _initializePodErc20Mintable(
         address _minter,
         uint256 _cotiChainId,
@@ -69,6 +73,8 @@ contract PodErc20Mintable is PodERC20 {
         _initializeMintableMinter(_minter);
     }
 
+    /// @notice Initialize the immutable-style minter slot for constructors and clones.
+    /// @param _minter Address authorized to mint; must not be zero.
     function _initializeMintableMinter(address _minter) internal {
         if (_mintableInitialized) {
             revert PodErc20MintableAlreadyInitialized();

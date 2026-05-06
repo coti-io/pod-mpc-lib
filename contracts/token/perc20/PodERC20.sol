@@ -10,7 +10,7 @@ import "./cotiside/IPodErc20CotiSide.sol";
 
 /// @title PodERC20
 /// @notice PoD-side private ERC-20: ciphertext cache and inbox-mediated async moves; COTI holds authoritative garbled state via {IPodErc20CotiSide}.
-/// @dev Callbacks only from `inbox` when the remote peer matches (`cotiChainId`, `cotiSideContract`). `setPublicAmountsEnabled` is not access-controlled—harden for production.
+/// @dev Callbacks only from `inbox` when the remote peer matches (`cotiChainId`, `cotiSideContract`). Public-amount methods expose amounts in calldata and logs; use encrypted `itUint256` entry points for privacy-sensitive flows.
 contract PodERC20 is IPodERC20, InboxUser {
     using MpcAbiCodec for MpcAbiCodec.MpcMethodCallContext;
 
@@ -46,28 +46,41 @@ contract PodERC20 is IPodERC20, InboxUser {
     mapping(address => mapping(address => bytes32)) private _pendingApprovalRequestIds;
     /// @dev Optional `transferAndCall` payload keyed by inbox `sourceRequestId`, cleared after callback.
     mapping(bytes32 => bytes) private _requestCallbacks;
+    mapping(bytes32 => IPodERC20.RequestStatus) public requests;
     mapping(bytes32 => bytes) public failedRequests;
     /// @dev Monotonic nonce from COTI; stale callbacks do not overwrite newer balances.
     mapping(address => uint256) public balanceNonces;
 
     // --- Events (PoD-specific; {Transfer}, {Approval}, etc. are declared on {IPodERC20}) ---
 
+    /// @notice Async transfer request was submitted to COTI.
     event TransferRequestSubmitted(address indexed from, address indexed to, bytes32 requestId);
+    /// @notice Async approval request was submitted to COTI.
     event ApprovalRequestSubmitted(address indexed owner, address indexed spender, bytes32 requestId);
+    /// @notice Async approval request failed on COTI.
     event ApprovalFailed(address indexed owner, address indexed spender, bytes errorMsg);
+    /// @notice Async balance-sync request failed on COTI.
     event SyncBalancesFailed(bytes32 requestId, bytes errorMsg);
+    /// @notice Async balance-sync request was submitted for accounts.
     event SyncBalancesRequested(address[] accounts, bytes32 requestId);
 
     // --- Errors ---
 
+    /// @notice A transfer/burn lock already exists for one of the affected accounts.
     error TransferAlreadyPending(address from, address to, bytes32 requestId);
+    /// @notice An approval lock already exists for the owner/spender pair.
     error ApprovalAlreadyPending(address owner, address spender, bytes32 requestId);
+    /// @notice Inbox caller was not the configured COTI-side peer.
     error OnlyCotiSideContract(uint256 remoteChainId, address remoteContract);
     /// @notice Thrown by the default {_checkMinter} hook; subclasses (e.g. {PodErc20Mintable}) can override to allow minting.
     error MintNotAllowed(address caller);
+    /// @notice Clone storage was already initialized.
     error PodERC20AlreadyInitialized();
+    /// @notice Initializer received an invalid zero address or chain id.
     error PodERC20InvalidInitialization();
+    /// @notice Public transfer permit deadline has passed.
     error PermitExpired(uint256 deadline);
+    /// @notice Public transfer permit signer did not match the owner.
     error InvalidPermitSigner(address signer, address owner);
 
     // --- Constructor ---
@@ -89,6 +102,8 @@ contract PodERC20 is IPodERC20, InboxUser {
         _initializePodERC20(_cotiChainId, _inbox, _cotiSideContract, _name, _symbol);
     }
 
+    /// @notice Accept native funds used to pay inbox fees for async pToken operations.
+    /// @dev `_sendPodTwoWay` may spend existing contract balance, so operational tooling can pre-fund this token for auto-fee flows.
     receive() external payable {}
 
     // --- External: mutating (user / admin) ---
@@ -241,6 +256,7 @@ contract PodERC20 is IPodERC20, InboxUser {
             PodERC20.syncBalancesCallback.selector,
             PodERC20.syncBalancesError.selector
         );
+        _setRequestStatus(requestId, IPodERC20.RequestStatus.Pending);
         emit SyncBalancesRequested(accounts, requestId);
     }
 
@@ -257,6 +273,7 @@ contract PodERC20 is IPodERC20, InboxUser {
             revert OnlyCotiSideContract(remoteChainId, remoteContract);
         }
         bytes32 sourceRequestId = inbox.inboxSourceRequestId();
+        _setRequestStatus(sourceRequestId, IPodERC20.RequestStatus.Success);
         (
             address from,
             ctUint256 memory newBalanceFrom,
@@ -301,6 +318,8 @@ contract PodERC20 is IPodERC20, InboxUser {
         if (remoteChainId != cotiChainId || remoteContract != cotiSideContract) {
             revert OnlyCotiSideContract(remoteChainId, remoteContract);
         }
+        bytes32 sourceRequestId = inbox.inboxSourceRequestId();
+        _setRequestStatus(sourceRequestId, IPodERC20.RequestStatus.Success);
         (address owner, ctUint256 memory ownerAmount, address spender, ctUint256 memory spenderAmount) = abi.decode(
             data,
             (address, ctUint256, address, ctUint256)
@@ -319,6 +338,8 @@ contract PodERC20 is IPodERC20, InboxUser {
         if (remoteChainId != cotiChainId || remoteContract != cotiSideContract) {
             revert OnlyCotiSideContract(remoteChainId, remoteContract);
         }
+        bytes32 sourceRequestId = inbox.inboxSourceRequestId();
+        _setRequestStatus(sourceRequestId, IPodERC20.RequestStatus.Success);
         (address[] memory addresses, ctUint256[] memory amounts, uint256 nonce) = abi.decode(
             data,
             (address[], ctUint256[], uint256)
@@ -345,6 +366,7 @@ contract PodERC20 is IPodERC20, InboxUser {
         }
         (address from, address to, bytes memory errorMsg) = abi.decode(data, (address, address, bytes));
         bytes32 sourceRequestId = inbox.inboxSourceRequestId();
+        _setRequestStatus(sourceRequestId, IPodERC20.RequestStatus.Failed);
         failedRequests[sourceRequestId] = errorMsg;
         if (from != address(0)) {
             _pendingTransferRequestIds[from] = bytes32(0);
@@ -361,6 +383,7 @@ contract PodERC20 is IPodERC20, InboxUser {
         }
         (address owner, address spender, bytes memory errorMsg) = abi.decode(data, (address, address, bytes));
         bytes32 sourceRequestId = inbox.inboxSourceRequestId();
+        _setRequestStatus(sourceRequestId, IPodERC20.RequestStatus.Failed);
         failedRequests[sourceRequestId] = errorMsg;
         _pendingApprovalRequestIds[owner][spender] = bytes32(0);
         emit ApprovalFailed(owner, spender, errorMsg);
@@ -373,6 +396,7 @@ contract PodERC20 is IPodERC20, InboxUser {
             revert OnlyCotiSideContract(remoteChainId, remoteContract);
         }
         bytes32 sourceRequestId = inbox.inboxSourceRequestId();
+        _setRequestStatus(sourceRequestId, IPodERC20.RequestStatus.Failed);
         emit SyncBalancesFailed(sourceRequestId, data);
     }
 
@@ -402,7 +426,10 @@ contract PodERC20 is IPodERC20, InboxUser {
     }
 
     /**
-     * @notice Estiamte the fee for two way methods
+     * @notice Estimate the native fee split used by auto-fee two-way token methods.
+     * @return totalFeeWei Sum of target and callback fee estimates.
+     * @return targetFeeWei Estimated local-token wei for the remote COTI execution leg.
+     * @return callbackFeeWei Estimated local-token wei for the PoD callback leg.
      */
     function estimateFee()
         external
@@ -487,6 +514,11 @@ contract PodERC20 is IPodERC20, InboxUser {
         );
     }
 
+    function _setRequestStatus(bytes32 requestId, IPodERC20.RequestStatus status) internal {
+        requests[requestId] = status;
+        emit RequestStatusUpdated(requestId, status);
+    }
+
     function _approve(address owner, address spender, itUint256 calldata value, uint256 totalValueWei, uint256 callbackFeeLocalWei) internal returns (bytes32 requestId) {
         if (_pendingApprovalRequestIds[owner][spender] != bytes32(0)) {
             revert ApprovalAlreadyPending(owner, spender, _pendingApprovalRequestIds[owner][spender]);
@@ -504,6 +536,7 @@ contract PodERC20 is IPodERC20, InboxUser {
             PodERC20.approveCallback.selector,
             PodERC20.approveError.selector
         );
+        _setRequestStatus(requestId, IPodERC20.RequestStatus.Pending);
         _pendingApprovalRequestIds[owner][spender] = requestId;
         emit ApprovalRequestSubmitted(owner, spender, requestId);
     }
@@ -526,6 +559,7 @@ contract PodERC20 is IPodERC20, InboxUser {
             PodERC20.transferError.selector
         );
 
+        _setRequestStatus(requestId, IPodERC20.RequestStatus.Pending);
         _pendingTransferRequestIds[from] = requestId;
         emit TransferRequestSubmitted(from, address(0), requestId);
     }
@@ -559,6 +593,7 @@ contract PodERC20 is IPodERC20, InboxUser {
             PodERC20.transferCallback.selector,
             PodERC20.transferError.selector
         );
+        _setRequestStatus(requestId, IPodERC20.RequestStatus.Pending);
         _pendingTransferRequestIds[from] = requestId;
         _pendingTransferRequestIds[to] = requestId;
         emit TransferRequestSubmitted(msg.sender, to, requestId);
@@ -591,6 +626,7 @@ contract PodERC20 is IPodERC20, InboxUser {
             PodERC20.transferCallback.selector,
             PodERC20.transferError.selector
         );
+        _setRequestStatus(requestId, IPodERC20.RequestStatus.Pending);
         _pendingTransferRequestIds[from] = requestId;
         _pendingTransferRequestIds[to] = requestId;
         emit TransferRequestSubmitted(from, to, requestId);
@@ -673,6 +709,7 @@ contract PodERC20 is IPodERC20, InboxUser {
             PodERC20.transferCallback.selector,
             PodERC20.transferError.selector
         );
+        _setRequestStatus(requestId, IPodERC20.RequestStatus.Pending);
         _pendingTransferRequestIds[to] = requestId;
         emit TransferRequestSubmitted(address(0), to, requestId);
     }
@@ -703,6 +740,7 @@ contract PodERC20 is IPodERC20, InboxUser {
             PodERC20.transferCallback.selector,
             PodERC20.transferError.selector
         );
+        _setRequestStatus(requestId, IPodERC20.RequestStatus.Pending);
         _pendingTransferRequestIds[from] = requestId;
         _pendingTransferRequestIds[to] = requestId;
         emit TransferRequestSubmitted(msg.sender, to, requestId);
@@ -735,6 +773,7 @@ contract PodERC20 is IPodERC20, InboxUser {
             PodERC20.transferCallback.selector,
             PodERC20.transferError.selector
         );
+        _setRequestStatus(requestId, IPodERC20.RequestStatus.Pending);
         _pendingTransferRequestIds[from] = requestId;
         _pendingTransferRequestIds[to] = requestId;
         emit TransferRequestSubmitted(from, to, requestId);
@@ -767,6 +806,7 @@ contract PodERC20 is IPodERC20, InboxUser {
             PodERC20.transferCallback.selector,
             PodERC20.transferError.selector
         );
+        _setRequestStatus(requestId, IPodERC20.RequestStatus.Pending);
         _pendingTransferRequestIds[from] = requestId;
         _pendingTransferRequestIds[to] = requestId;
         emit TransferRequestSubmitted(from, to, requestId);
@@ -797,6 +837,7 @@ contract PodERC20 is IPodERC20, InboxUser {
             PodERC20.approveCallback.selector,
             PodERC20.approveError.selector
         );
+        _setRequestStatus(requestId, IPodERC20.RequestStatus.Pending);
         _pendingApprovalRequestIds[owner][spender] = requestId;
         emit ApprovalRequestSubmitted(owner, spender, requestId);
     }
@@ -824,6 +865,7 @@ contract PodERC20 is IPodERC20, InboxUser {
             PodERC20.transferCallback.selector,
             PodERC20.transferError.selector
         );
+        _setRequestStatus(requestId, IPodERC20.RequestStatus.Pending);
         _pendingTransferRequestIds[from] = requestId;
         emit TransferRequestSubmitted(from, address(0), requestId);
     }
@@ -851,6 +893,7 @@ contract PodERC20 is IPodERC20, InboxUser {
             PodERC20.transferCallback.selector,
             PodERC20.transferError.selector
         );
+        _setRequestStatus(requestId, IPodERC20.RequestStatus.Pending);
         _pendingTransferRequestIds[to] = requestId;
         emit TransferRequestSubmitted(address(0), to, requestId);
     }
