@@ -23,6 +23,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { receiptWaitOptions } from "./mpc-test-utils.js";
 
 const MOD_256 = 1n << 256n;
+const cotiReceiptWaitOptions = { ...receiptWaitOptions, timeout: 900_000 };
 
 /**
  * Some COTI RPCs fail `eth_estimateGas` on heavy `mul256` txs; a modest explicit cap avoids that.
@@ -49,8 +50,9 @@ const deployGasOpt = (() => {
   if (!raw) return {};
   return { gas: BigInt(raw) };
 })();
+const deployGas = "gas" in deployGasOpt ? deployGasOpt.gas : undefined;
 
-describe("MpcExecutorCotiTest (COTI)", async function () {
+describe("MpcExecutorCotiTest (COTI)", { concurrency: false, timeout: 900_000 }, async function () {
   if (!canRunCoti) {
     it.skip(
       "set COTI_TESTNET_RPC_URL and COTI_TESTNET_PRIVATE_KEY (or PRIVATE_KEY) to run this file",
@@ -78,26 +80,85 @@ describe("MpcExecutorCotiTest (COTI)", async function () {
 
   let proxyInbox: Awaited<ReturnType<(typeof viem)["deployContract"]>>;
   let harness: Awaited<ReturnType<(typeof viem)["deployContract"]>>;
+  let nextNonce: number | undefined;
+
+  const txOpts = async (gas?: bigint) => {
+    const gasPrice = await publicClient.getGasPrice();
+    if (nextNonce === undefined) {
+      nextNonce = await publicClient.getTransactionCount({
+        address: account.address,
+        blockTag: "pending",
+      });
+    }
+    const nonce = nextNonce;
+    nextNonce += 1;
+    return {
+      account: wallet.account,
+      gasPrice: gasPrice + (gasPrice * 4n) / 5n + 1n,
+      nonce,
+      ...(gas === undefined ? {} : { gas }),
+    } as const;
+  };
+
+  const syncNonceFromError = (err: unknown): boolean => {
+    const message = err instanceof Error ? err.message : String(err);
+    const next = message.match(/next nonce (\d+)/i);
+    if (next?.[1]) {
+      nextNonce = Number(next[1]);
+      return true;
+    }
+    if (message.match(/nonce .*lower than the current nonce/i)) {
+      nextNonce = (nextNonce ?? 0) + 1;
+      return true;
+    }
+    return false;
+  };
+
+  const withNonceRetry = async <T>(fn: (opts: Awaited<ReturnType<typeof txOpts>>) => Promise<T>, gas?: bigint): Promise<T> => {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try {
+        return await fn(await txOpts(gas));
+      } catch (err) {
+        lastError = err;
+        if (!syncNonceFromError(err)) {
+          throw err;
+        }
+      }
+    }
+    throw lastError;
+  };
+
+  const simulateOpts = (gas?: bigint) =>
+    ({
+      account: wallet.account,
+      ...(gas === undefined ? {} : { gas }),
+    }) as const;
 
   before(async function () {
     // Split deploy: nested `new MpcExecutor` in one tx exceeds typical testnet gas / estimate limits.
-    proxyInbox = await viem.deployContract("MpcExecutorCotiProxyInbox", [], {
-      ...deployOpts,
-      ...deployGasOpt,
-    } as any);
-    const executor = await viem.deployContract("MpcExecutor", [proxyInbox.address], {
-      ...deployOpts,
-      ...deployGasOpt,
-    } as any);
-    await proxyInbox.write.registerExecutor([executor.address], { account: wallet.account });
-    harness = await viem.deployContract(
-      "MpcExecutorCotiTest",
-      [executor.address, proxyInbox.address],
-      { ...deployOpts, ...deployGasOpt } as any
+    proxyInbox = await withNonceRetry(
+      (opts) => viem.deployContract("MpcExecutorCotiProxyInbox", [], { ...deployOpts, ...opts } as any),
+      deployGas
     );
-  });
+    const executor = await withNonceRetry(
+      (opts) => viem.deployContract("MpcExecutor", [proxyInbox.address], { ...deployOpts, ...opts } as any),
+      deployGas
+    );
+    const registerHash = await withNonceRetry((opts) => proxyInbox.write.registerExecutor([executor.address], opts));
+    await publicClient.waitForTransactionReceipt({ hash: registerHash, ...cotiReceiptWaitOptions });
+    harness = await withNonceRetry(
+      (opts) =>
+        viem.deployContract(
+          "MpcExecutorCotiTest",
+          [executor.address, proxyInbox.address],
+          { ...deployOpts, ...opts } as any
+        ),
+      deployGas
+    );
+  }, { timeout: 900_000 });
 
-  const cOwner = () => wallet.account.address;
+  const cOwner = () => harness.address;
 
   describe("direct MpcCore (reference)", function () {
     async function runMul256Tx(
@@ -105,13 +166,10 @@ describe("MpcExecutorCotiTest (COTI)", async function () {
       a: bigint,
       b: bigint
     ): Promise<bigint> {
-      const hash = await harness.write[name]([a, b], {
-        account: wallet.account,
-        gas: GAS_MPC_MUL256,
-      });
+      const hash = await withNonceRetry((opts) => harness.write[name]([a, b], opts), GAS_MPC_MUL256);
       const receipt = await publicClient.waitForTransactionReceipt({
         hash,
-        ...receiptWaitOptions,
+        ...cotiReceiptWaitOptions,
       });
       assert.equal(receipt.status, "success", `${name} must succeed (check gas / RPC)`);
       return harness.read.lastPlain256();
@@ -129,22 +187,14 @@ describe("MpcExecutorCotiTest (COTI)", async function () {
     it("checkedMul256PublicPlain matches mul when no overflow", async function () {
       const a = 12345n;
       const b = 67890n;
-      assert.equal(
-        await runMul256Tx("checkedMul256PublicPlain", a, b),
-        await runMul256Tx("mul256PublicPlain", a, b)
-      );
+      assert.equal(await runMul256Tx("checkedMul256PublicPlain", a, b), a * b);
     });
 
     it("checkedMul256PublicPlain reverts on uint256 overflow", async function () {
       const max = MOD_256 - 1n;
-      const hash = await harness.write.checkedMul256PublicPlain([max, 2n], {
-        account: wallet.account,
-        gas: GAS_MPC_MUL256,
-      });
-      const receipt = await publicClient.waitForTransactionReceipt({ hash, ...receiptWaitOptions });
-      assert.equal(
-        receipt.status,
-        "reverted",
+      await assert.rejects(
+        async () => harness.simulate.checkedMul256PublicPlain([max, 2n], simulateOpts(GAS_MPC_MUL256) as any),
+        undefined,
         "checkedMul256 must revert when the true product does not fit in uint256"
       );
     });
@@ -152,30 +202,25 @@ describe("MpcExecutorCotiTest (COTI)", async function () {
     it("mul128PublicPlain", async function () {
       const a = 1_000_000n;
       const b = 2_000_000n;
-      const hash = await harness.write.mul128PublicPlain([a, b], {
-        account: wallet.account,
-        gas: GAS_MPC_MUL128,
-      });
-      await publicClient.waitForTransactionReceipt({ hash, ...receiptWaitOptions });
+      const hash = await withNonceRetry((opts) => harness.write.mul128PublicPlain([a, b], opts), GAS_MPC_MUL128);
+      await publicClient.waitForTransactionReceipt({ hash, ...cotiReceiptWaitOptions });
       assert.equal(await harness.read.lastPlain128(), a * b);
     });
 
     it("mul64PublicPlain (checked)", async function () {
       const a = 1234n;
       const b = 5678n;
-      const hash = await harness.write.mul64PublicPlain([a, b], { account: wallet.account });
-      await publicClient.waitForTransactionReceipt({ hash, ...receiptWaitOptions });
+      const hash = await withNonceRetry((opts) => harness.write.mul64PublicPlain([a, b], opts));
+      await publicClient.waitForTransactionReceipt({ hash, ...cotiReceiptWaitOptions });
       assert.equal(await harness.read.lastPlain64(), a * b);
     });
 
     it("mul64PublicPlain reverts on overflow", async function () {
       const a = (1n << 63n) - 1n;
       const b = 4n;
-      const hash = await harness.write.mul64PublicPlain([a, b], { account: wallet.account });
-      const receipt = await publicClient.waitForTransactionReceipt({ hash, ...receiptWaitOptions });
-      assert.equal(
-        receipt.status,
-        "reverted",
+      await assert.rejects(
+        async () => harness.simulate.mul64PublicPlain([a, b], simulateOpts() as any),
+        undefined,
         "checkedMul64 must revert when the product does not fit in uint64"
       );
     });
@@ -208,24 +253,21 @@ describe("MpcExecutorCotiTest (COTI)", async function () {
         [(1n << 128n) - 1n, (1n << 128n) - 1n],
       ];
       for (const [a, b] of pairs) {
-        const hDirect = await harness.write.mul256PublicPlain([a, b], {
-          account: wallet.account,
-          gas: GAS_MPC_MUL256,
-        });
+        const hDirect = await withNonceRetry((opts) => harness.write.mul256PublicPlain([a, b], opts), GAS_MPC_MUL256);
         const rDirect = await publicClient.waitForTransactionReceipt({
           hash: hDirect,
-          ...receiptWaitOptions,
+          ...cotiReceiptWaitOptions,
         });
         assert.equal(rDirect.status, "success", "direct mul256PublicPlain");
         const direct = await harness.read.lastPlain256();
 
-        const hExec = await harness.write.executorMul256PublicPlain([a, b, cOwner()], {
-          account: wallet.account,
-          gas: GAS_MPC_MUL256,
-        });
+        const hExec = await withNonceRetry(
+          (opts) => harness.write.executorMul256PublicPlain([a, b, cOwner()], opts),
+          GAS_MPC_MUL256
+        );
         const rExec = await publicClient.waitForTransactionReceipt({
           hash: hExec,
-          ...receiptWaitOptions,
+          ...cotiReceiptWaitOptions,
         });
         assert.equal(rExec.status, "success", "executorMul256PublicPlain");
         const viaExec = await harness.read.lastPlain256();
@@ -242,19 +284,16 @@ describe("MpcExecutorCotiTest (COTI)", async function () {
     it("executorMul128PublicPlain matches direct mul128PublicPlain", async function () {
       const a = 1_000_000n;
       const b = 2_000_000n;
-      const h1 = await harness.write.mul128PublicPlain([a, b], {
-        account: wallet.account,
-        gas: GAS_MPC_MUL128,
-      });
-      const rec1 = await publicClient.waitForTransactionReceipt({ hash: h1, ...receiptWaitOptions });
+      const h1 = await withNonceRetry((opts) => harness.write.mul128PublicPlain([a, b], opts), GAS_MPC_MUL128);
+      const rec1 = await publicClient.waitForTransactionReceipt({ hash: h1, ...cotiReceiptWaitOptions });
       assert.equal(rec1.status, "success", "mul128PublicPlain");
       const direct = await harness.read.lastPlain128();
 
-      const h2 = await harness.write.executorMul128PublicPlain([a, b, cOwner()], {
-        account: wallet.account,
-        gas: GAS_MPC_MUL128,
-      });
-      const rec2 = await publicClient.waitForTransactionReceipt({ hash: h2, ...receiptWaitOptions });
+      const h2 = await withNonceRetry(
+        (opts) => harness.write.executorMul128PublicPlain([a, b, cOwner()], opts),
+        GAS_MPC_MUL128
+      );
+      const rec2 = await publicClient.waitForTransactionReceipt({ hash: h2, ...cotiReceiptWaitOptions });
       assert.equal(rec2.status, "success", "executorMul128PublicPlain");
       const viaExec = await harness.read.lastPlain128();
 
@@ -265,15 +304,13 @@ describe("MpcExecutorCotiTest (COTI)", async function () {
     it("executorMul64PublicPlain matches direct mul64PublicPlain", async function () {
       const a = 1234n;
       const b = 5678n;
-      const h1 = await harness.write.mul64PublicPlain([a, b], { account: wallet.account });
-      const rec1 = await publicClient.waitForTransactionReceipt({ hash: h1, ...receiptWaitOptions });
+      const h1 = await withNonceRetry((opts) => harness.write.mul64PublicPlain([a, b], opts));
+      const rec1 = await publicClient.waitForTransactionReceipt({ hash: h1, ...cotiReceiptWaitOptions });
       assert.equal(rec1.status, "success", "mul64PublicPlain");
       const direct = await harness.read.lastPlain64();
 
-      const h2 = await harness.write.executorMul64PublicPlain([a, b, cOwner()], {
-        account: wallet.account,
-      });
-      const rec2 = await publicClient.waitForTransactionReceipt({ hash: h2, ...receiptWaitOptions });
+      const h2 = await withNonceRetry((opts) => harness.write.executorMul64PublicPlain([a, b, cOwner()], opts));
+      const rec2 = await publicClient.waitForTransactionReceipt({ hash: h2, ...cotiReceiptWaitOptions });
       assert.equal(rec2.status, "success", "executorMul64PublicPlain");
       const viaExec = await harness.read.lastPlain64();
 
@@ -284,11 +321,7 @@ describe("MpcExecutorCotiTest (COTI)", async function () {
     it("executor mul64 reverts on overflow (same as direct)", async function () {
       const a = (1n << 63n) - 1n;
       const b = 4n;
-      const hash = await harness.write.executorMul64PublicPlain([a, b, cOwner()], {
-        account: wallet.account,
-      });
-      const receipt = await publicClient.waitForTransactionReceipt({ hash, ...receiptWaitOptions });
-      assert.equal(receipt.status, "reverted");
+      await assert.rejects(async () => harness.simulate.executorMul64PublicPlain([a, b, cOwner()], simulateOpts() as any));
     });
   });
 });

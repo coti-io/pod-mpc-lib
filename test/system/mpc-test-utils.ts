@@ -237,7 +237,7 @@ export async function ensureMpcInboxOracleAndFees(params: {
 }
 
 /** Extra gas on the `batchProcessRequests` tx so the inbox can forward `targetFee` to the subcall (EIP-150). */
-const MIN_BATCH_TX_GAS_HEADROOM = 4_000_000n;
+const MIN_BATCH_TX_GAS_HEADROOM = 2_500_000n;
 
 /**
  * Minimum gas limit for the outer `batchProcessRequests` tx so `InboxMiner` can forward the full

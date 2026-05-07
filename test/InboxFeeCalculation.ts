@@ -5,7 +5,7 @@ import { network } from "hardhat";
 import {
   TESTNET_COTI_USD,
   TESTNET_ETH_USD,
-  usdPerTokenWeiX128,
+  usdPerWholeToken18,
 } from "../scripts/deploy-utils.js";
 
 /** Same as `mpc-test-utils.receiptWaitOptions` — avoid importing full mpc-test-utils (coti-ethers, etc.) in this file. */
@@ -15,7 +15,7 @@ const logStep = (message: string) => {
   console.log(`[mpc-test] ${message}`);
 };
 
-/** Human-readable USD from `getPricesUSD()` (18-dec fixed); rounds to `fracDigits` places to hide X128 dust. */
+/** Human-readable USD from `getPricesUSD()` (18-dec fixed); rounds to `fracDigits` places. */
 function formatUsdDisplay(value: bigint, fracDigits = 6): string {
   const W = 10n ** 18n;
   const intPart = value / W;
@@ -49,8 +49,8 @@ async function getRequestParsed(inbox: any, requestId: `0x${string}`): Promise<P
   };
 }
 
-/** Same numeric value as `PriceOracle.PRICE_SCALE` (`1 << 128`) — use for tests where local and remote USD-per-wei quotes are equal. */
-const PRICE_SCALE_X128 = 2n ** 128n;
+/** Same numeric value as `PriceOracle.PRICE_SCALE`; use when local and remote USD quotes are equal. */
+const PRICE_SCALE_18 = 10n ** 18n;
 
 /** Remote leg minimum gas units (constant template). */
 const REMOTE_MIN_GAS_UNITS = 18_000_000n;
@@ -183,9 +183,9 @@ describe(
       return ctxPromise;
     };
 
-    /** `PriceOracle.PRICE_SCALE`-style X128 USD per wei; both legs set explicitly per test. */
-    const deployInboxAndOracle = async (prices: { localX128: bigint; remoteX128: bigint }) => {
-      const { localX128, remoteX128 } = prices;
+    /** `PriceOracle.PRICE_SCALE`-style 18-decimal USD prices; both legs set explicitly per test. */
+    const deployInboxAndOracle = async (prices: { localUsd18: bigint; remoteUsd18: bigint }) => {
+      const { localUsd18, remoteUsd18 } = prices;
       const { viem, publicClient, wallet, deployer } = await getCtx();
       logStep("Deploy Inbox + PriceOracle (owner = deployer)");
       const inbox = await viem.deployContract("Inbox", [0n], {
@@ -195,9 +195,9 @@ describe(
         client: { public: publicClient, wallet },
       });
       const w = { account: deployer } as const;
-      logStep(`PriceOracle: setLocalTokenPriceUSDX128(${localX128}) setRemoteTokenPriceUSDX128(${remoteX128})`);
-      await oracle.write.setLocalTokenPriceUSDX128([localX128], w);
-      await oracle.write.setRemoteTokenPriceUSDX128([remoteX128], w);
+      logStep(`PriceOracle: setLocalTokenPriceUSD(${localUsd18}) setRemoteTokenPriceUSD(${remoteUsd18})`);
+      await oracle.write.setLocalTokenPriceUSD([localUsd18], w);
+      await oracle.write.setRemoteTokenPriceUSD([remoteUsd18], w);
       const [localUsd, remoteUsd] = await oracle.read.getPricesUSD();
       logStep(`getPricesUSD(): local=${formatUsdDisplay(localUsd)} remote=${formatUsdDisplay(remoteUsd)} USD`);
       await inbox.write.setPriceOracle([oracle.address], w);
@@ -217,8 +217,8 @@ describe(
       { timeout: 300_000 },
       async () => {
       const { inbox, deployer, publicClient } = await deployInboxAndOracle({
-        localX128: PRICE_SCALE_X128,
-        remoteX128: PRICE_SCALE_X128,
+        localUsd18: PRICE_SCALE_18,
+        remoteUsd18: PRICE_SCALE_18,
       });
       logStep("updateMinFeeConfigs: local=template, remote=constant 18_000_000");
       await inbox.write.updateMinFeeConfigs([{ ...LOCAL_TEMPLATE }, { ...remoteConstantOnly }], {
@@ -282,8 +282,8 @@ describe(
       { timeout: 300_000 },
       async () => {
       const { inbox, deployer, publicClient } = await deployInboxAndOracle({
-        localX128: PRICE_SCALE_X128,
-        remoteX128: PRICE_SCALE_X128,
+        localUsd18: PRICE_SCALE_18,
+        remoteUsd18: PRICE_SCALE_18,
       });
       logStep("updateMinFeeConfigs: local=constant 18_000_000, remote=local template fields");
       await inbox.write.updateMinFeeConfigs(
@@ -326,8 +326,8 @@ describe(
       { timeout: 300_000 },
       async () => {
       const { inbox, deployer } = await deployInboxAndOracle({
-        localX128: PRICE_SCALE_X128,
-        remoteX128: PRICE_SCALE_X128,
+        localUsd18: PRICE_SCALE_18,
+        remoteUsd18: PRICE_SCALE_18,
       });
       await inbox.write.updateMinFeeConfigs([{ ...LOCAL_TEMPLATE }, { ...remoteConstantOnly }], {
         account: deployer,
@@ -395,11 +395,11 @@ describe(
       "calculateTwoWayFeeRequiredInLocalToken (dataSize 20, exec gas 200k): tx fees match helper (ETH local / COTI remote)",
       { timeout: 300_000 },
       async () => {
-        const localTokenPriceUSDX128 = usdPerTokenWeiX128(TESTNET_ETH_USD);
-        const remoteTokenPriceUSDX128 = usdPerTokenWeiX128(TESTNET_COTI_USD);
+        const localTokenPriceUsd18 = usdPerWholeToken18(TESTNET_ETH_USD);
+        const remoteTokenPriceUsd18 = usdPerWholeToken18(TESTNET_COTI_USD);
         const { inbox, deployer, publicClient } = await deployInboxAndOracle({
-          localX128: localTokenPriceUSDX128,
-          remoteX128: remoteTokenPriceUSDX128,
+          localUsd18: localTokenPriceUsd18,
+          remoteUsd18: remoteTokenPriceUsd18,
         });
         const DATA_SIZE_HINT = 20n;
         const EXEC_GAS = 200_000n;
@@ -420,8 +420,8 @@ describe(
         const minLocalGasForHint = expectedTemplateMinGasUnits(DATA_SIZE_HINT, LOCAL_TEMPLATE);
         const remoteGasRequired = REMOTE_MIN_GAS_UNITS + EXEC_GAS;
         const targetGasLocalUnits =
-          (remoteGasRequired * remoteTokenPriceUSDX128 + localTokenPriceUSDX128 - 1n) /
-          localTokenPriceUSDX128;
+          (remoteGasRequired * remoteTokenPriceUsd18 + localTokenPriceUsd18 - 1n) /
+          localTokenPriceUsd18;
         const expectedCallerWei = (minLocalGasForHint + EXEC_GAS) * gp;
         const expectedTargetWei = targetGasLocalUnits * gp;
         assert.equal(callerWeiEst, expectedCallerWei, "local leg = (expectedMinFee(20) + 200k exec gas) * gasPrice");
@@ -477,7 +477,7 @@ describe(
         const remoteWeiLocal = totalWei - callerWeiEst;
         // On-chain: targetGasRemoteUnits = (remoteWei * localPrice / remotePrice) / gasPrice — not remoteWei/gp alone.
         const expectedTargetGas =
-          (remoteWeiLocal * localTokenPriceUSDX128) / remoteTokenPriceUSDX128 / gpMined;
+          (remoteWeiLocal * localTokenPriceUsd18) / remoteTokenPriceUsd18 / gpMined;
         logStep(`stored targetFee (gas units)=${req.targetFee} callerFee (gas units)=${req.callerFee}`);
         logStep(`expected targetFee=${expectedTargetGas} callerFee=${expectedCallerGas}`);
 
