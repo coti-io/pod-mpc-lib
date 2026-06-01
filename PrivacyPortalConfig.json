@@ -6,7 +6,7 @@
         "factory": "0xa7bfadc82f15f29733eb6c21c9a391cc7926929b",
         "portalImplementation": "0x2f9cb1c73818eaa2991d27fd073b242bed866a6c",
         "podTokenImplementation": "0xbf615045803edb0dbb2c9b9afedcd782c383a09b",
-        "inbox": "0xfa158f9e49c8bb77f971c3630ebcd23a8a88d14e",
+        "inbox": "0xd0d7d663217fc531504b930d810995118768fa37",
         "cotiNetwork": "cotiTestnet",
         "cotiChainId": 7082400
       },
@@ -27,7 +27,7 @@
       "privacyPortal": {
         "factory": "0x0f38299492ca1d31aac75830f49ab7800f4767d9",
         "cotiSideImplementation": "0xe2e84591e8e9a754f083c58b33ed85c8fc1a7686",
-        "inbox": "0x0f9a5cd00450db1217839c35d23d56f96d6331ae"
+        "inbox": "0xd0d7d663217fc531504b930d810995118768fa37"
       },
       "tokens": []
     }

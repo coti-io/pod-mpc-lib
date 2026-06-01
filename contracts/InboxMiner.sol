@@ -8,8 +8,9 @@ import "./MinerBase.sol";
 /// @title InboxMiner
 /// @notice Miner-driven inbox: ingest mined payloads, execute targets, and collect fees.
 contract InboxMiner is InboxBase, MinerBase, IInboxMiner {
-    /// @param _chainId This chain's ID (see {InboxBase}).
-    constructor(uint256 _chainId) InboxBase(_chainId) MinerBase(msg.sender) {}
+    /// @dev `chainId` and the real owner are set later via the {Inbox.init} initializer
+    /// so the creation bytecode is identical across chains (deterministic CreateX deploys).
+    constructor() MinerBase(msg.sender) {}
 
     /// @inheritdoc IInboxMiner
     function batchProcessRequests(uint256 sourceChainId, MinedRequest[] memory mined) external onlyMiner {

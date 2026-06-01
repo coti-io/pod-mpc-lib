@@ -2,7 +2,7 @@
 pragma solidity ^0.8.19;
 
 import "../../InboxUser.sol";
-import "../../fee/InboxFeeManager.sol";
+import "../../fee/IInboxFeeManager.sol";
 import "../../mpccodec/MpcAbiCodec.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "./IPodERC20.sol";
@@ -642,7 +642,7 @@ contract PodERC20 is IPodERC20, InboxUser {
         view
         returns (uint256 targetFeeWei, uint256 callbackFeeWei)
     {
-        (targetFeeWei, callbackFeeWei) = InboxFeeManager(address(inbox)).calculateTwoWayFeeRequiredInLocalToken(
+        (targetFeeWei, callbackFeeWei) = IInboxFeeManager(address(inbox)).calculateTwoWayFeeRequiredInLocalToken(
             FEE_ESTIMATE_REMOTE_CALL_SIZE,
             FEE_ESTIMATE_CALLBACK_CALL_SIZE,
             FEE_ESTIMATE_REMOTE_EXEC_GAS,

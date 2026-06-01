@@ -117,6 +117,28 @@ export const logStep = (message: string) => {
   console.log(`[mpc-test] ${message}`);
 };
 
+/**
+ * Deploy the (constructor-arg-free) {Inbox} and run its one-time {Inbox.init} initializer,
+ * setting `chainId` and keeping ownership with the deploying account. Mirrors the production
+ * CreateX `deployCreate3AndInit` flow, but deploys directly since CreateX is not present on the
+ * in-process EDR test network.
+ */
+export const deployInboxWithInit = async (
+  hh: {
+    deployContract: (name: string, args: unknown[], opts?: any) => Promise<any>;
+    getWalletClients: (opts?: any) => Promise<any[]>;
+  },
+  chainId: bigint,
+  clientOpts?: any
+): Promise<any> => {
+  const inbox = await hh.deployContract("Inbox", [], clientOpts);
+  const owner: `0x${string}` =
+    clientOpts?.client?.wallet?.account?.address ??
+    (await hh.getWalletClients())[0].account.address;
+  await inbox.write.init([owner, chainId]);
+  return inbox;
+};
+
 // Returns a receipt wait config with consistent polling.
 export const receiptWaitOptions = { timeout: 300_000, pollingInterval: 2_000 };
 
@@ -1031,7 +1053,7 @@ export const setupContext = async (params: {
     mpcAdder = await params.sepoliaViem.getContractAt(podAdderContractName, mpcAdderAddress as `0x${string}`);
   } else {
     logStep(`Deploying Hardhat Inbox + ${podAdderContractName}`);
-    inboxSepolia = await params.sepoliaViem.deployContract("Inbox", [BigInt(sepoliaChainId)]);
+    inboxSepolia = await deployInboxWithInit(params.sepoliaViem, BigInt(sepoliaChainId));
     mpcAdder = await params.sepoliaViem.deployContract(podAdderContractName, [inboxSepolia.address]);
   }
 
@@ -1060,16 +1082,12 @@ export const setupContext = async (params: {
     );
   } else {
     logStep("Deploying COTI Inbox + MpcExecutor");
-    inboxCoti = await params.cotiViem.deployContract(
-      "Inbox",
-      [cotiChainId],
-      {
-        client: {
-          public: cotiPublicClient,
-          wallet: cotiWallet,
-        },
-      } as any
-    );
+    inboxCoti = await deployInboxWithInit(params.cotiViem, BigInt(cotiChainId), {
+      client: {
+        public: cotiPublicClient,
+        wallet: cotiWallet,
+      },
+    } as any);
     mpcExecutor = await params.cotiViem.deployContract(
       "MpcExecutor",
       [inboxCoti.address],
@@ -1248,7 +1266,7 @@ export const setupContextWideMpc = async (
     );
   } else {
     logStep(`Deploying Hardhat Inbox + ${config.podAdderContractName}`);
-    inboxSepolia = await params.sepoliaViem.deployContract("Inbox", [BigInt(sepoliaChainId)]);
+    inboxSepolia = await deployInboxWithInit(params.sepoliaViem, BigInt(sepoliaChainId));
     mpcAdder = await params.sepoliaViem.deployContract(config.podAdderContractName, [
       inboxSepolia.address,
     ]);
@@ -1283,16 +1301,12 @@ export const setupContextWideMpc = async (
     );
   } else {
     logStep("Deploying COTI Inbox + MpcExecutor");
-    inboxCoti = await params.cotiViem.deployContract(
-      "Inbox",
-      [cotiChainId],
-      {
-        client: {
-          public: cotiPublicClient,
-          wallet: cotiWallet,
-        },
-      } as any
-    );
+    inboxCoti = await deployInboxWithInit(params.cotiViem, BigInt(cotiChainId), {
+      client: {
+        public: cotiPublicClient,
+        wallet: cotiWallet,
+      },
+    } as any);
     mpcExecutor = await params.cotiViem.deployContract(
       "MpcExecutor",
       [inboxCoti.address],
@@ -1523,7 +1537,7 @@ export const setupPodTestContext = async (params: {
     );
   } else {
     logStep(`Deploying Hardhat Inbox + ${params.podContractName}`);
-    inboxSepolia = await params.sepoliaViem.deployContract("Inbox", [BigInt(sepoliaChainId)]);
+    inboxSepolia = await deployInboxWithInit(params.sepoliaViem, BigInt(sepoliaChainId));
     podTest = await params.sepoliaViem.deployContract(params.podContractName, [inboxSepolia.address]);
   }
 
@@ -1577,16 +1591,12 @@ export const setupPodTestContext = async (params: {
       );
     }
     logStep("Deploying COTI Inbox + MpcExecutor");
-    inboxCoti = await params.cotiViem.deployContract(
-      "Inbox",
-      [cotiChainId],
-      {
-        client: {
-          public: cotiPublicClient,
-          wallet: cotiWallet,
-        },
-      } as any
-    );
+    inboxCoti = await deployInboxWithInit(params.cotiViem, BigInt(cotiChainId), {
+      client: {
+        public: cotiPublicClient,
+        wallet: cotiWallet,
+      },
+    } as any);
     mpcExecutor = await params.cotiViem.deployContract(
       "MpcExecutor",
       [inboxCoti.address],
