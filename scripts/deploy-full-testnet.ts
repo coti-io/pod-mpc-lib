@@ -7,6 +7,8 @@ import {
   asAddress,
   configureTestnetInboxMinFees,
   deployAndWireTestnetPriceOracle,
+  deployDeterministicInbox,
+  ensureMinerRegistered,
   getChainConfig,
   getViemClients,
   podConfigureKeepInbox,
@@ -14,8 +16,9 @@ import {
   requireEnv,
 } from "./deploy-utils.js";
 
-const SOURCE_NETWORK = "sepolia";
-const COTI_NETWORK = "cotiTestnet";
+/** Source network (Hardhat network name). Defaults to Sepolia; set to `avalancheFuji` for the AVAX<->COTI pair. */
+const SOURCE_NETWORK = process.env.SOURCE_NETWORK ?? "sepolia";
+const COTI_NETWORK = process.env.COTI_NETWORK ?? "cotiTestnet";
 const ONLY_MPC_ADDER = process.env.ONLY_MPC_ADDER === "true";
 const deployConfigPath = path.resolve(process.cwd(), "deployConfig.json");
 
@@ -83,14 +86,25 @@ const main = async () => {
     `[deploy-full-testnet] COTI connected: chainId=${cotiChainIdNumber} network=${cotiChainLabel}`
   );
 
-  console.log("[deploy-full-testnet] Deploying source Inbox...");
-  const sourceInbox = await sourceViem.deployContract("Inbox", [0n], {
-    client: { public: sourcePublicClient, wallet: sourceWalletClient },
+  console.log("[deploy-full-testnet] Deploying deterministic source Inbox via CreateX...");
+  const sourceInboxDeploy = await deployDeterministicInbox({
+    viem: sourceViem,
+    publicClient: sourcePublicClient,
+    walletClient: sourceWalletClient,
   });
-  console.log(`[deploy-full-testnet] Source Inbox deployed: ${sourceInbox.address}`);
-  console.log("[deploy-full-testnet] Adding source miner...");
-  await sourceInbox.write.addMiner([minerAddress]);
-  console.log("[deploy-full-testnet] Source miner added");
+  const sourceInbox = sourceInboxDeploy.inbox;
+  console.log(
+    sourceInboxDeploy.alreadyDeployed
+      ? `[deploy-full-testnet] Source Inbox already deployed: ${sourceInbox.address}`
+      : `[deploy-full-testnet] Source Inbox deployed: ${sourceInbox.address}`
+  );
+  console.log("[deploy-full-testnet] Ensuring source miner is registered...");
+  await ensureMinerRegistered({
+    inbox: sourceInbox,
+    miner: minerAddress,
+    publicClient: sourcePublicClient,
+    walletClient: sourceWalletClient,
+  });
   console.log("[deploy-full-testnet] Deploying source PriceOracle and wiring inbox...");
   const sourcePriceOracle = await deployAndWireTestnetPriceOracle({
     viem: sourceViem,
@@ -124,19 +138,30 @@ const main = async () => {
     network: sourceChainLabel,
   });
 
-  console.log("[deploy-full-testnet] Deploying COTI Inbox...");
-  const cotiInbox = await cotiViem.deployContract("Inbox", [0n], {
-    client: { public: cotiPublicClient, wallet: cotiWalletClient },
+  console.log("[deploy-full-testnet] Deploying deterministic COTI Inbox via CreateX...");
+  const cotiInboxDeploy = await deployDeterministicInbox({
+    viem: cotiViem,
+    publicClient: cotiPublicClient,
+    walletClient: cotiWalletClient,
   });
-  console.log(`[deploy-full-testnet] COTI Inbox deployed: ${cotiInbox.address}`);
+  const cotiInbox = cotiInboxDeploy.inbox;
+  console.log(
+    cotiInboxDeploy.alreadyDeployed
+      ? `[deploy-full-testnet] COTI Inbox already deployed: ${cotiInbox.address}`
+      : `[deploy-full-testnet] COTI Inbox deployed: ${cotiInbox.address}`
+  );
   console.log("[deploy-full-testnet] Deploying MpcExecutor...");
   const cotiExecutor = await cotiViem.deployContract("MpcExecutor", [cotiInbox.address], {
     client: { public: cotiPublicClient, wallet: cotiWalletClient },
   });
   console.log(`[deploy-full-testnet] MpcExecutor deployed: ${cotiExecutor.address}`);
-  console.log("[deploy-full-testnet] Adding COTI miner...");
-  await cotiInbox.write.addMiner([minerAddress]);
-  console.log("[deploy-full-testnet] COTI miner added");
+  console.log("[deploy-full-testnet] Ensuring COTI miner is registered...");
+  await ensureMinerRegistered({
+    inbox: cotiInbox,
+    miner: minerAddress,
+    publicClient: cotiPublicClient,
+    walletClient: cotiWalletClient,
+  });
   console.log("[deploy-full-testnet] Deploying COTI PriceOracle and wiring inbox...");
   const cotiPriceOracle = await deployAndWireTestnetPriceOracle({
     viem: cotiViem,
@@ -256,14 +281,14 @@ const main = async () => {
   await fs.writeFile(deployConfigPath, `${JSON.stringify(deployConfig, null, 2)}\n`, "utf8");
   console.log("[deploy-full-testnet] Updated deployConfig.json");
 
-  await verifyContract(SOURCE_NETWORK, "Inbox", sourceInbox.address, ["0"]);
+  await verifyContract(SOURCE_NETWORK, "Inbox", sourceInbox.address, []);
   await verifyContract(
     SOURCE_NETWORK,
     "PriceOracle",
     sourcePriceOracle.address,
     [sourceWalletClient.account.address]
   );
-  await verifyContract(COTI_NETWORK, "Inbox", cotiInbox.address, ["0"]);
+  await verifyContract(COTI_NETWORK, "Inbox", cotiInbox.address, []);
   await verifyContract(
     COTI_NETWORK,
     "PriceOracle",

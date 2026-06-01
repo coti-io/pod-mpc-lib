@@ -188,9 +188,10 @@ describe(
       const { localUsd18, remoteUsd18 } = prices;
       const { viem, publicClient, wallet, deployer } = await getCtx();
       logStep("Deploy Inbox + PriceOracle (owner = deployer)");
-      const inbox = await viem.deployContract("Inbox", [0n], {
+      const inbox = await viem.deployContract("Inbox", [], {
         client: { public: publicClient, wallet },
       });
+      await inbox.write.init([deployer, 0n], { account: deployer });
       const oracle = await viem.deployContract("PriceOracle", [deployer], {
         client: { public: publicClient, wallet },
       });

@@ -7,6 +7,8 @@ import {
   asAddress,
   configureTestnetInboxMinFees,
   deployAndWireTestnetPriceOracle,
+  deployDeterministicInbox,
+  ensureMinerRegistered,
   getChainConfig,
   getViemClients,
   isTestnetSepoliaCotiPairChain,
@@ -36,14 +38,25 @@ const main = async () => {
   const minerAddress = asAddress(requireEnv("MINER_ADDRESS"), "MINER_ADDRESS");
   console.log(`[deploy-inbox] Using miner: ${minerAddress}`);
 
-  console.log("[deploy-inbox] Deploying Inbox...");
-  const inbox = await viem.deployContract("Inbox", [0n], {
-    client: { public: publicClient, wallet: walletClient },
+  console.log("[deploy-inbox] Deploying deterministic Inbox via CreateX...");
+  const { inbox, predictedAddress, alreadyDeployed, txHash } = await deployDeterministicInbox({
+    viem,
+    publicClient,
+    walletClient,
   });
-  console.log(`[deploy-inbox] Inbox deployed: ${inbox.address}`);
-  console.log("[deploy-inbox] Adding miner...");
-  await inbox.write.addMiner([minerAddress]);
-  console.log("[deploy-inbox] Miner added");
+  console.log(
+    alreadyDeployed
+      ? `[deploy-inbox] Inbox already deployed at deterministic address: ${predictedAddress}`
+      : `[deploy-inbox] Inbox deployed at deterministic address: ${inbox.address} (tx ${txHash})`
+  );
+  console.log("[deploy-inbox] Ensuring miner is registered...");
+  const minerAdded = await ensureMinerRegistered({
+    inbox,
+    miner: minerAddress,
+    publicClient,
+    walletClient,
+  });
+  console.log(minerAdded ? "[deploy-inbox] Miner added" : "[deploy-inbox] Miner already registered");
 
   const deployer = await resolveDeployerAddress(walletClient);
   const writeOpts = { account: deployer } as const;

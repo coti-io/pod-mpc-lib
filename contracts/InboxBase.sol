@@ -26,6 +26,9 @@ contract InboxBase is IInbox, InboxFeeManager {
     ExecutionContext internal _currentContext;
     uint256 internal _requestNonce;
 
+    /// @dev One-time initialization guard for {_initInboxBase}.
+    bool private _initialized;
+
     uint64 internal constant ERROR_CODE_EXECUTION_FAILED = 1;
     uint64 internal constant ERROR_CODE_ENCODE_FAILED = 2;
 
@@ -64,8 +67,11 @@ contract InboxBase is IInbox, InboxFeeManager {
     /// @param gasRemainingApprox Remaining gas budget from `targetFee` after the subcall (floored at zero).
     event FeeExecutionSettled(bytes32 indexed requestId, uint256 gasUsed, uint256 gasRemainingApprox);
 
+    /// @dev One-time base initializer. Sets `chainId` and trips the init guard.
     /// @param _chainId This chain's ID; pass `0` to use `block.chainid`.
-    constructor(uint256 _chainId) {
+    function _initInboxBase(uint256 _chainId) internal {
+        require(!_initialized, "Inbox: initialized");
+        _initialized = true;
         chainId = _chainId == 0 ? block.chainid : _chainId;
     }
 

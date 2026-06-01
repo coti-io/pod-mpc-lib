@@ -35,6 +35,17 @@ export default defineConfig({
         },
       },
     },
+    43113: {
+      name: "Avalanche Fuji",
+      chainType: "l1",
+      blockExplorers: {
+        etherscan: {
+          name: "Routescan (Fuji)",
+          url: "https://testnet.snowtrace.io",
+          apiUrl: "https://api.routescan.io/v2/network/testnet/evm/43113/etherscan/api",
+        },
+      },
+    },
   },
   solidity: {
     // Must be ≥0.8.20 for @openzeppelin/contracts@5.x (e.g. Ownable).
@@ -87,6 +98,15 @@ export default defineConfig({
       chainId: 7082400,
       url: envOrConfig("COTI_TESTNET_RPC_URL"),
       accounts: [privateKeyForCotiTestnet()],
+    },
+    avalancheFuji: {
+      type: "http",
+      chainType: "l1",
+      chainId: 43113,
+      url:
+        process.env.AVALANCHE_FUJI_RPC_URL ??
+        "https://avalanche-fuji-c-chain-rpc.publicnode.com",
+      accounts: [privateKeyFor("AVALANCHE_FUJI_PRIVATE_KEY")],
     },
     // Chain 1 for multichain message passing testing
     // Use in-process simulation to avoid external nodes in tests

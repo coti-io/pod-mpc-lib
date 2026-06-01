@@ -4,19 +4,90 @@
       "inbox": ""
     },
     "31337": {
-      "priceOracle": "0x5fbdb2315678afecb367f032d93f642f64180aa3"
+      "priceOracle": "",
+      "feeConfig": {
+        "local": {
+          "constantFee": "0",
+          "gasPerByte": "10",
+          "callbackExecutionGas": "100000",
+          "errorLength": "300",
+          "bufferRatioX10000": "5000"
+        },
+        "remote": {
+          "constantFee": "12000000",
+          "gasPerByte": "0",
+          "callbackExecutionGas": "0",
+          "errorLength": "0",
+          "bufferRatioX10000": "0"
+        }
+      }
+    },
+    "43113": {
+      "inbox": "",
+      "priceOracle": "",
+      "feeConfig": {
+        "local": {
+          "constantFee": "0",
+          "gasPerByte": "10",
+          "callbackExecutionGas": "100000",
+          "errorLength": "300",
+          "bufferRatioX10000": "5000"
+        },
+        "remote": {
+          "constantFee": "12000000",
+          "gasPerByte": "0",
+          "callbackExecutionGas": "0",
+          "errorLength": "0",
+          "bufferRatioX10000": "0"
+        }
+      }
     },
     "2632500": {
       "inbox": "",
       "cotiExecutor": ""
     },
     "7082400": {
-      "inbox": "0x32dd39487121ea3c90d61f79c866dd33c95e194d",
-      "cotiExecutor": "0x4ac4344553822cdc7201439873d575214ee3d133"
+      "inbox": "0xd0d7d663217fc531504b930d810995118768Fa37",
+      "cotiExecutor": "0x5a4bf0c1006ea4954fe6efe62cf046d03205efa0",
+      "priceOracle": "0x8403966ca0195ea7cc91742b07c5ee480b0aae8d",
+      "pErc20Coti": "0xf05eea670c1cc385b7e94aeb9cf6408cbd60fc47",
+      "feeConfig": {
+        "local": {
+          "constantFee": "12000000",
+          "gasPerByte": "0",
+          "callbackExecutionGas": "0",
+          "errorLength": "0",
+          "bufferRatioX10000": "0"
+        },
+        "remote": {
+          "constantFee": "0",
+          "gasPerByte": "10",
+          "callbackExecutionGas": "100000",
+          "errorLength": "300",
+          "bufferRatioX10000": "5000"
+        }
+      }
     },
     "11155111": {
-      "inbox": "0xcf3a3693e45c8505b4151864c5be76818f5672c8",
-      "priceOracle": "0xa56ea551d6abd4ff5a94677895117d286bc1f1cf"
+      "inbox": "0xd0d7d663217fc531504b930d810995118768Fa37",
+      "priceOracle": "0xf51c789e4c60d33a2abcfd656e607724f56aaf0d",
+      "mpcAdder": "0x1aa8f3b9e2bdeed740e701601ef24969129a0ca8",
+      "feeConfig": {
+        "local": {
+          "constantFee": "0",
+          "gasPerByte": "10",
+          "callbackExecutionGas": "100000",
+          "errorLength": "300",
+          "bufferRatioX10000": "5000"
+        },
+        "remote": {
+          "constantFee": "12000000",
+          "gasPerByte": "0",
+          "callbackExecutionGas": "0",
+          "errorLength": "0",
+          "bufferRatioX10000": "0"
+        }
+      }
     }
   }
 }

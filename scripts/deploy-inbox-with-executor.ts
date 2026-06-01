@@ -2,6 +2,8 @@ import { network } from "hardhat";
 import {
   appendDeploymentLog,
   asAddress,
+  deployDeterministicInbox,
+  ensureMinerRegistered,
   getChainConfig,
   getViemClients,
   readDeployConfig,
@@ -30,19 +32,34 @@ const main = async () => {
   const minerAddress = asAddress(requireEnv("MINER_ADDRESS"), "MINER_ADDRESS");
   console.log(`[deploy-inbox-with-executor] Using miner: ${minerAddress}`);
 
-  console.log("[deploy-inbox-with-executor] Deploying Inbox...");
-  const inbox = await viem.deployContract("Inbox", [0n], {
-    client: { public: publicClient, wallet: walletClient },
+  console.log("[deploy-inbox-with-executor] Deploying deterministic Inbox via CreateX...");
+  const { inbox, predictedAddress, alreadyDeployed, txHash } = await deployDeterministicInbox({
+    viem,
+    publicClient,
+    walletClient,
   });
-  console.log(`[deploy-inbox-with-executor] Inbox deployed: ${inbox.address}`);
+  console.log(
+    alreadyDeployed
+      ? `[deploy-inbox-with-executor] Inbox already deployed at deterministic address: ${predictedAddress}`
+      : `[deploy-inbox-with-executor] Inbox deployed at deterministic address: ${inbox.address} (tx ${txHash})`
+  );
   console.log("[deploy-inbox-with-executor] Deploying MpcExecutor...");
   const mpcExecutor = await viem.deployContract("MpcExecutor", [inbox.address], {
     client: { public: publicClient, wallet: walletClient },
   });
   console.log(`[deploy-inbox-with-executor] MpcExecutor deployed: ${mpcExecutor.address}`);
-  console.log("[deploy-inbox-with-executor] Adding miner...");
-  await inbox.write.addMiner([minerAddress]);
-  console.log("[deploy-inbox-with-executor] Miner added");
+  console.log("[deploy-inbox-with-executor] Ensuring miner is registered...");
+  const minerAdded = await ensureMinerRegistered({
+    inbox,
+    miner: minerAddress,
+    publicClient,
+    walletClient,
+  });
+  console.log(
+    minerAdded
+      ? "[deploy-inbox-with-executor] Miner added"
+      : "[deploy-inbox-with-executor] Miner already registered"
+  );
 
   console.log("[deploy-inbox-with-executor] Writing deployment log entries");
   await appendDeploymentLog({

@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { defineChain, parseUnits, zeroAddress, type PublicClient, type WalletClient } from "viem";
+import {
+  deployInboxDeterministic as deployInboxViaCreateX,
+  type DeployInboxDeterministicResult,
+  type InboxArtifact,
+} from "./createx.js";
 
 /** Await mining so the next `write` does not reuse a nonce still pending on COTI (replacement transaction underpriced). */
 export const waitMined = async (publicClient: unknown, hash: `0x${string}`) => {
@@ -34,6 +39,15 @@ type DeploymentLogEntry = {
 const logPath = path.resolve(process.cwd(), "deployment.log");
 const deployConfigPath = path.resolve(process.cwd(), "deployConfig.json");
 
+/** Fee template as stored in deployConfig.json (string|number for JSON safety with large values). */
+export type FeeConfigJson = {
+  constantFee: string | number;
+  gasPerByte: string | number;
+  callbackExecutionGas: string | number;
+  errorLength: string | number;
+  bufferRatioX10000: string | number;
+};
+
 type DeployConfig = {
   chains: Record<
     string,
@@ -41,13 +55,21 @@ type DeployConfig = {
       inbox?: string;
       cotiExecutor?: string;
       priceOracle?: string;
+      /** Min-fee templates for this chain's inbox (local = this chain, remote = paired chain). */
+      feeConfig?: { local: FeeConfigJson; remote: FeeConfigJson };
     }
   >;
 };
 
 /** Fixed testnet spot prices (USD per whole 18‑decimal native token). Used as {PriceOracle} 18‑decimal fixed values. */
 export const TESTNET_ETH_USD = "2103.41";
-export const TESTNET_COTI_USD = "0.01286";
+/** COTI spot (USD). Source: CoinGecko `coti` ~2026-06-01; refresh before relying on the COTI/AVAX ratio. */
+export const TESTNET_COTI_USD = "0.01272522";
+/** AVAX spot (USD) for Fuji oracle legs. Source: CoinGecko `avalanche-2` ~2026-06-01; refresh as needed. */
+export const TESTNET_AVAX_USD = "8.81";
+
+/** Avalanche Fuji chain id (source-side, paired with COTI testnet). */
+export const AVALANCHE_FUJI_CHAIN_ID = 43113;
 
 /** USD per 1 whole token (18 decimals), matching {PriceOracle.PRICE_SCALE}. */
 export const usdPerWholeToken18 = (usdWholeToken: string): bigint => parseUnits(usdWholeToken, 18);
@@ -67,16 +89,21 @@ export type OracleLegs = OracleUsdLegs;
 export const oracleUsdPricesForChain = (chainId: number): OracleUsdLegs => {
   const eth = usdPerWholeToken18(TESTNET_ETH_USD);
   const coti = usdPerWholeToken18(TESTNET_COTI_USD);
+  const avax = usdPerWholeToken18(TESTNET_AVAX_USD);
   const cotiTestnetId = Number(process.env.COTI_TESTNET_CHAIN_ID || "7082400");
   if (chainId === 11155111 || chainId === 31337) {
     return { localUsd18: eth, remoteUsd18: coti };
+  }
+  if (chainId === AVALANCHE_FUJI_CHAIN_ID) {
+    return { localUsd18: avax, remoteUsd18: coti };
   }
   if (chainId === cotiTestnetId) {
     return { localUsd18: coti, remoteUsd18: eth };
   }
   throw new Error(
     `Unsupported chainId ${chainId} for testnet oracle legs. ` +
-      `Use Sepolia (11155111), COTI testnet (${cotiTestnetId}), or local (31337), ` +
+      `Use Sepolia (11155111), Avalanche Fuji (${AVALANCHE_FUJI_CHAIN_ID}), ` +
+      `COTI testnet (${cotiTestnetId}), or local (31337), ` +
       `or set COTI_TESTNET_CHAIN_ID to match this network.`
   );
 };
@@ -116,13 +143,31 @@ export type FeeConfigTuple = {
   bufferRatioX10000: bigint;
 };
 
+/** Convert a deployConfig.json fee template into an on-chain `FeeConfig` tuple. */
+export const feeConfigTupleFromJson = (j: FeeConfigJson): FeeConfigTuple => ({
+  constantFee: BigInt(j.constantFee),
+  gasPerByte: BigInt(j.gasPerByte),
+  callbackExecutionGas: BigInt(j.callbackExecutionGas),
+  errorLength: BigInt(j.errorLength),
+  bufferRatioX10000: BigInt(j.bufferRatioX10000),
+});
+
+/** Convert an on-chain `FeeConfig` tuple into a JSON-safe deployConfig.json template. */
+export const feeConfigTupleToJson = (t: FeeConfigTuple): FeeConfigJson => ({
+  constantFee: t.constantFee.toString(),
+  gasPerByte: t.gasPerByte.toString(),
+  callbackExecutionGas: t.callbackExecutionGas.toString(),
+  errorLength: t.errorLength.toString(),
+  bufferRatioX10000: t.bufferRatioX10000.toString(),
+});
+
 /**
  * Minimum fee templates for this inbox: **local** = this chain's native leg, **remote** = the paired chain's leg.
  * Sepolia: local ETH (variable), remote COTI (constant). COTI: local COTI (constant), remote ETH (variable).
  */
 export const testnetMinFeeConfigsForChain = (chainId: number): { local: FeeConfigTuple; remote: FeeConfigTuple } => {
   const cotiTestnetId = Number(process.env.COTI_TESTNET_CHAIN_ID || "7082400");
-  if (chainId === 11155111 || chainId === 31337) {
+  if (chainId === 11155111 || chainId === 31337 || chainId === AVALANCHE_FUJI_CHAIN_ID) {
     return { local: { ...FEE_CONFIG_SEPOLIA_SIDE }, remote: { ...FEE_CONFIG_COTI_SIDE } };
   }
   if (chainId === cotiTestnetId) {
@@ -130,15 +175,41 @@ export const testnetMinFeeConfigsForChain = (chainId: number): { local: FeeConfi
   }
   throw new Error(
     `Unsupported chainId ${chainId} for testnet fee configs. ` +
-      `Use Sepolia (11155111), COTI testnet (${cotiTestnetId}), or local (31337), ` +
+      `Use Sepolia (11155111), Avalanche Fuji (${AVALANCHE_FUJI_CHAIN_ID}), ` +
+      `COTI testnet (${cotiTestnetId}), or local (31337), ` +
       `or set COTI_TESTNET_CHAIN_ID to match this network.`
   );
 };
 
-/** True for Sepolia, local Hardhat, or COTI testnet (same IDs as {@link testnetMinFeeConfigsForChain}). */
+/**
+ * Min-fee templates for `chainId`, sourced from `deployConfig.json` `chains[id].feeConfig`
+ * when present, otherwise the built-in {@link testnetMinFeeConfigsForChain} defaults.
+ * This makes `deployConfig.json` the single source of truth for deployed fee parameters.
+ */
+export const readFeeConfigForChain = async (
+  chainId: number
+): Promise<{ local: FeeConfigTuple; remote: FeeConfigTuple }> => {
+  try {
+    const cfg = await readDeployConfig();
+    const fc = cfg.chains?.[String(chainId)]?.feeConfig;
+    if (fc?.local && fc?.remote) {
+      return { local: feeConfigTupleFromJson(fc.local), remote: feeConfigTupleFromJson(fc.remote) };
+    }
+  } catch {
+    // Missing/unreadable config — fall back to built-in defaults below.
+  }
+  return testnetMinFeeConfigsForChain(chainId);
+};
+
+/** True for Sepolia, Avalanche Fuji, local Hardhat, or COTI testnet (same IDs as {@link testnetMinFeeConfigsForChain}). */
 export const isTestnetSepoliaCotiPairChain = (chainId: number): boolean => {
   const cotiTestnetId = Number(process.env.COTI_TESTNET_CHAIN_ID || "7082400");
-  return chainId === 11155111 || chainId === 31337 || chainId === cotiTestnetId;
+  return (
+    chainId === 11155111 ||
+    chainId === 31337 ||
+    chainId === AVALANCHE_FUJI_CHAIN_ID ||
+    chainId === cotiTestnetId
+  );
 };
 
 /** Address that will sign txs for this wallet (must match constructor `initialOwner` for oracle admin calls). */
@@ -205,6 +276,7 @@ export const deployTestnetPriceOracle = async (params: DeployOracleParams) => {
 
 /**
  * Sets {@link InboxMiner.updateMinFeeConfigs} for the Sepolia↔COTI testnet pair (local = this chain, remote = paired chain).
+ * Fee values come from `deployConfig.json` via {@link readFeeConfigForChain} (built-in defaults if unset).
  */
 export const configureTestnetInboxMinFees = async (params: {
   inbox: {
@@ -216,7 +288,7 @@ export const configureTestnetInboxMinFees = async (params: {
   walletClient: WalletClient;
   chainId: number;
 }) => {
-  const { local, remote } = testnetMinFeeConfigsForChain(params.chainId);
+  const { local, remote } = await readFeeConfigForChain(params.chainId);
   const deployer = await resolveDeployerAddress(params.walletClient);
   const writeOpts = { account: deployer } as const;
   const hash = await params.inbox.write.updateMinFeeConfigs([local, remote], writeOpts);
@@ -242,6 +314,68 @@ export const deployAndWireTestnetPriceOracle = async (
   const h = (await inbox.write.setPriceOracle([oracle.address], writeOpts)) as `0x${string}`;
   await waitMined(params.publicClient, h);
   return oracle;
+};
+
+/** Load the compiled `Inbox` artifact (abi + constructor-arg-free creation bytecode) from disk. */
+export const readInboxArtifact = async (): Promise<InboxArtifact> => {
+  const artifactPath = path.resolve(process.cwd(), "artifacts/contracts/Inbox.sol/Inbox.json");
+  const raw = await fs.readFile(artifactPath, "utf8");
+  const json = JSON.parse(raw) as { abi: InboxArtifact["abi"]; bytecode?: string };
+  if (!json.bytecode || !json.bytecode.startsWith("0x")) {
+    throw new Error("readInboxArtifact: missing/invalid bytecode (run `npx hardhat compile` first)");
+  }
+  return { abi: json.abi, bytecode: json.bytecode as `0x${string}` };
+};
+
+/**
+ * Deploy the Inbox deterministically via CreateX `deployCreate3AndInit` (same address on every
+ * chain) and return a viem contract instance bound to the deterministic address. `init` runs
+ * atomically with `chainId = block.chainid` and `owner = deployer`. Idempotent: if code already
+ * exists at the precomputed address, no transaction is sent.
+ */
+export const deployDeterministicInbox = async (params: {
+  viem: {
+    getContractAt: (
+      name: string,
+      address: `0x${string}`,
+      opts: { client: { public: unknown; wallet: unknown } }
+    ) => Promise<any>;
+  };
+  publicClient: PublicClient;
+  walletClient: WalletClient;
+}): Promise<DeployInboxDeterministicResult & { inbox: any; deployer: `0x${string}` }> => {
+  const deployer = await resolveDeployerAddress(params.walletClient);
+  const artifact = await readInboxArtifact();
+  const result = await deployInboxViaCreateX({
+    publicClient: params.publicClient,
+    walletClient: params.walletClient,
+    deployer,
+    chainId: 0n,
+    artifact,
+  });
+  const inbox = await params.viem.getContractAt("Inbox", result.address, {
+    client: { public: params.publicClient, wallet: params.walletClient },
+  });
+  return { ...result, inbox, deployer };
+};
+
+/** Register `miner` on the inbox only if not already registered (idempotent; avoids reverts/wasted gas). */
+export const ensureMinerRegistered = async (params: {
+  inbox: {
+    read: { isMiner: (args: [`0x${string}`]) => Promise<boolean> };
+    write: { addMiner: (args: [`0x${string}`], opts?: { account: `0x${string}` }) => Promise<`0x${string}`> };
+  };
+  miner: `0x${string}`;
+  publicClient: unknown;
+  walletClient: WalletClient;
+}): Promise<boolean> => {
+  if (await params.inbox.read.isMiner([params.miner])) {
+    return false;
+  }
+  const deployer = await resolveDeployerAddress(params.walletClient);
+  const hash = await params.inbox.write.addMiner([params.miner], { account: deployer });
+  await waitMined(params.publicClient, hash);
+  return true;
 };
 
 export const requireEnv = (key: string): string => {
@@ -288,6 +422,9 @@ const resolveRpcUrl = (chainId: number) => {
   }
   if (chainId === 11155111 && process.env.SEPOLIA_RPC_URL) {
     return process.env.SEPOLIA_RPC_URL;
+  }
+  if (chainId === AVALANCHE_FUJI_CHAIN_ID) {
+    return process.env.AVALANCHE_FUJI_RPC_URL ?? "https://avalanche-fuji-c-chain-rpc.publicnode.com";
   }
   if (process.env.RPC_URL) {
     return process.env.RPC_URL;
