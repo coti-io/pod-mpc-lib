@@ -23,8 +23,8 @@
       }
     },
     "43113": {
-      "inbox": "",
-      "priceOracle": "",
+      "inbox": "0x8930D7c9Ea425F4C9ce47E408443bC9b3ff79f09",
+      "priceOracle": "0xb588666e72c106d80ca68994e6c18b5772183fdf",
       "feeConfig": {
         "local": {
           "constantFee": "0",
@@ -40,17 +40,18 @@
           "errorLength": "0",
           "bufferRatioX10000": "0"
         }
-      }
+      },
+      "mpcAdder": "0x479d15bd86e86a21403cefc7da6377b4d3daf993"
     },
     "2632500": {
       "inbox": "",
       "cotiExecutor": ""
     },
     "7082400": {
-      "inbox": "0xd0d7d663217fc531504b930d810995118768Fa37",
-      "cotiExecutor": "0x5a4bf0c1006ea4954fe6efe62cf046d03205efa0",
-      "priceOracle": "0x8403966ca0195ea7cc91742b07c5ee480b0aae8d",
-      "pErc20Coti": "0xf05eea670c1cc385b7e94aeb9cf6408cbd60fc47",
+      "inbox": "0x8930D7c9Ea425F4C9ce47E408443bC9b3ff79f09",
+      "cotiExecutor": "0x90091c2a13019f95ae1f04d746bcd71a1ead30ca",
+      "priceOracle": "0x0a700e5cfac0e824b50f141bf8f2ca0443391666",
+      "pErc20Coti": "",
       "feeConfig": {
         "local": {
           "constantFee": "12000000",
@@ -69,9 +70,9 @@
       }
     },
     "11155111": {
-      "inbox": "0xd0d7d663217fc531504b930d810995118768Fa37",
-      "priceOracle": "0xf51c789e4c60d33a2abcfd656e607724f56aaf0d",
-      "mpcAdder": "0x1aa8f3b9e2bdeed740e701601ef24969129a0ca8",
+      "inbox": "",
+      "priceOracle": "",
+      "mpcAdder": "",
       "feeConfig": {
         "local": {
           "constantFee": "0",

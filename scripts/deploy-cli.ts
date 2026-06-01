@@ -13,8 +13,10 @@ import {
   ensureMinerRegistered,
   getViemClients,
   optionalEnv,
+  podConfigureKeepInbox,
   readFeeConfigForChain,
   resolveDeployerAddress,
+  waitMined,
 } from "./deploy-utils.js";
 import {
   explorerAddressUrl,
@@ -96,6 +98,49 @@ const deploySimple = async (ctx: DeployCtx, name: string, args: unknown[]): Prom
     client: { public: ctx.publicClient, wallet: ctx.walletClient },
   });
   return c.address as Address;
+};
+
+// --- source-side Pod app COTI routing (MpcAdder -> COTI MpcExecutor) ---
+
+const COTI_TESTNET_CHAIN_ID = 7082400n;
+const COTI_MAINNET_CHAIN_ID = 2632500n;
+
+/** Resolve the COTI chain id this source chain pairs with and its recorded MPC executor address. */
+const resolveCotiExecutor = async (
+  ctx: DeployCtx
+): Promise<{ cotiChainId: bigint; executor?: Address }> => {
+  const cotiChainId = ctx.chainId === 1 ? COTI_MAINNET_CHAIN_ID : COTI_TESTNET_CHAIN_ID;
+  const cfg = await readCfg();
+  const raw: unknown = cfg.chains?.[String(cotiChainId)]?.cotiExecutor;
+  const executor =
+    typeof raw === "string" && raw.startsWith("0x") && raw.length === 42 ? (raw as Address) : undefined;
+  return { cotiChainId, executor };
+};
+
+/**
+ * Point an already-deployed MpcAdder at the COTI MPC executor (owner-gated `configure`, keeps inbox).
+ * Idempotent. Returns false (with a warning) when the executor isn't recorded yet so the caller can
+ * preserve the deployed address and let the user re-run the ConfigureAdder action later.
+ */
+const configureMpcAdder = async (ctx: DeployCtx, adderAddress: Address): Promise<boolean> => {
+  const { cotiChainId, executor } = await resolveCotiExecutor(ctx);
+  if (!executor) {
+    console.warn(
+      `  COTI executor not set in deployConfig.chains.${cotiChainId}.cotiExecutor; ` +
+        `deploy MpcExecutor on COTI first, then run the ConfigureAdder action.`
+    );
+    return false;
+  }
+  const adder = await ctx.viem.getContractAt("MpcAdder", adderAddress, {
+    client: { public: ctx.publicClient, wallet: ctx.walletClient },
+  });
+  const deployer = await resolveDeployerAddress(ctx.walletClient);
+  const hash = await adder.write.configure(podConfigureKeepInbox(executor, cotiChainId), {
+    account: deployer,
+  });
+  await waitMined(ctx.publicClient, hash);
+  console.log(`  configured MpcAdder -> executor ${executor} (cotiChainId ${cotiChainId})`);
+  return true;
 };
 
 // --- fee config (read on-chain templates to compare against deployConfig.json) ---
@@ -259,8 +304,35 @@ const TARGETS: Target[] = [
     dependsOn: ["inbox"],
     configKey: "mpcAdder",
     resolveAddress: (_ctx, chainCfg) => chainCfg.mpcAdder || undefined,
-    deploy: (ctx) => deploySimple(ctx, "MpcAdder", [ctx.inboxAddress]),
+    deploy: async (ctx) => {
+      const address = await deploySimple(ctx, "MpcAdder", [ctx.inboxAddress]);
+      await configureMpcAdder(ctx, address);
+      return address;
+    },
     verifyArgs: (ctx) => [ctx.inboxAddress],
+  },
+  {
+    id: "configureAdder",
+    label: "ConfigureAdder",
+    kind: "action",
+    roles: ["source"],
+    dependsOn: ["mpcAdder"],
+    status: async (ctx) => {
+      const { cotiChainId, executor } = await resolveCotiExecutor(ctx);
+      if (!executor) return { applied: false, detail: `needs COTI executor (chain ${cotiChainId})` };
+      // `mpcExecutorAddress` is internal on-chain (no getter), so we can't confirm the current
+      // value — surface the intended target and let the user (re-)apply on demand.
+      return { applied: false, detail: `ready -> ${executor}` };
+    },
+    run: async (ctx) => {
+      const cfg = await readCfg();
+      const adderAddr: unknown = cfg.chains?.[String(ctx.chainId)]?.mpcAdder;
+      if (typeof adderAddr !== "string" || !adderAddr) {
+        throw new Error(`MpcAdder not recorded for chain ${ctx.chainId}; deploy it first.`);
+      }
+      const ok = await configureMpcAdder(ctx, adderAddr as Address);
+      if (!ok) throw new Error("COTI executor address missing; cannot configure MpcAdder.");
+    },
   },
   {
     id: "pErc20",
