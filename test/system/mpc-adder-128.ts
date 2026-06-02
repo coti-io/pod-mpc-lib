@@ -48,7 +48,7 @@ describe("MpcAdder128 (system)", async function () {
       ...receiptWaitOptions,
     });
     logStep("Test1: tx confirmed, fetching latest request");
-    const request = await getLatestRequest(ctx.contracts.inboxSepolia);
+    const request = await getLatestRequest(ctx.contracts.inboxSepolia, ctx.chainIds.coti);
 
     const expectedSelector = toFunctionSelector(
       "add128((uint256,uint256),(uint256,uint256),address)"
@@ -108,7 +108,7 @@ describe("MpcAdder128 (system)", async function () {
       ...receiptWaitOptions,
     });
     logStep("Test2: tx confirmed, loading latest request");
-    const request = await getLatestRequest(ctx.contracts.inboxSepolia);
+    const request = await getLatestRequest(ctx.contracts.inboxSepolia, ctx.chainIds.coti);
     const { requestIdUsed: cotiRequestId } = await mineRequest(
       ctx,
       "coti",
@@ -156,7 +156,7 @@ describe("MpcAdder128 (system)", async function () {
       hash: txHash,
       ...receiptWaitOptions,
     });
-    const request = await getLatestRequest(ctx.contracts.inboxSepolia);
+    const request = await getLatestRequest(ctx.contracts.inboxSepolia, ctx.chainIds.coti);
     const { requestIdUsed: cotiRequestId } = await mineRequest(
       ctx,
       "coti",
@@ -193,7 +193,7 @@ describe("MpcAdder128 (system)", async function () {
       hash: txHash,
       ...receiptWaitOptions,
     });
-    const request = await getLatestRequest(ctx.contracts.inboxSepolia);
+    const request = await getLatestRequest(ctx.contracts.inboxSepolia, ctx.chainIds.coti);
     const { requestIdUsed: cotiRequestId } = await mineRequest(
       ctx,
       "coti",

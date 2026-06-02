@@ -82,7 +82,7 @@ describe("MpcAdderPausable retryFailedRequest (system)", async function () {
       );
       await ctx.sepolia.publicClient.waitForTransactionReceipt({ hash: addTx, ...receiptWaitOptions });
 
-      const outbound = await getLatestRequest(ctx.contracts.inboxSepolia);
+      const outbound = await getLatestRequest(ctx.contracts.inboxSepolia, ctx.chainIds.coti);
 
       // --- Remote execution on COTI (miner batch) ---
       logStep("mine inbound request on COTI (MPC + response request creation)");

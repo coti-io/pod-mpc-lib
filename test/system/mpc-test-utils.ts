@@ -443,26 +443,34 @@ export const parseRequest = (raw: any): Request => {
   };
 };
 
-// Loads the latest request from the inbox using getRequests.
-export const getLatestRequest = async (inbox: any): Promise<Request> => {
-  const requestCount = await inbox.read.getRequestsLen();
+// Loads the latest request sent to `targetChainId` from the inbox using getRequests.
+export const getLatestRequest = async (
+  inbox: any,
+  targetChainId: bigint | number
+): Promise<Request> => {
+  const requestCount = await inbox.read.getRequestsLen([BigInt(targetChainId)]);
   console.log("number of requests in source", requestCount);
   assert.ok(Number(requestCount) > 0);
   const fromIndex = Number(requestCount) - 1;
-  const requests = await getRequests(inbox, fromIndex, 1);
+  const requests = await getRequests(inbox, targetChainId, fromIndex, 1);
   assert.ok(requests.length > 0);
   return requests[0];
 };
 
-// Loads a single request from the inbox mapping.
+// Loads a single outbound request from the inbox mapping (id encodes source+target+nonce).
 export const getRequest = async (inbox: any, requestId: `0x${string}`): Promise<Request> => {
   const raw = await inbox.read.requests([requestId]);
   return parseRequest(raw);
 };
 
-// Loads a range of requests and parses them.
-export const getRequests = async (inbox: any, from: number, len: number): Promise<Request[]> => {
-  const raw = await inbox.read.getRequests([from, len]);
+// Loads a range of requests sent to `targetChainId` and parses them.
+export const getRequests = async (
+  inbox: any,
+  targetChainId: bigint | number,
+  from: number,
+  len: number
+): Promise<Request[]> => {
+  const raw = await inbox.read.getRequests([BigInt(targetChainId), from, len]);
   return (raw as any[]).map(parseRequest);
 };
 
@@ -528,8 +536,10 @@ export const mineRequest = async (
 
   let nextRequestId: `0x${string}`;
   if (options?.nonceOverride !== undefined) {
+    const targetChainIdForId = (await inbox.read.chainId()) as bigint;
     nextRequestId = (await inbox.read.getRequestId([
       sourceChainId,
+      targetChainIdForId,
       BigInt(options.nonceOverride),
     ])) as `0x${string}`;
     logStep(`${label}: nonceOverride ${options.nonceOverride} → requestId ${nextRequestId}`);
@@ -663,7 +673,7 @@ export const runCrossChainTwoWayRoundTrip = async (
   /** Receipt target on Hardhat for the return leg (callback / error delivery). */
   sepoliaRelayTxHash: `0x${string}`;
 }> => {
-  const outboundRequest = await getLatestRequest(ctx.contracts.inboxSepolia);
+  const outboundRequest = await getLatestRequest(ctx.contracts.inboxSepolia, ctx.chainIds.coti);
   const { requestIdUsed: cotiIncomingRequestId } = await mineRequest(
     ctx,
     "coti",
@@ -1736,7 +1746,7 @@ export const runPodRoundTrip = async (
   const writeOpts = { ...podTwoWayWriteOptions(ctx.podTwoWayFees), ...gasOpts };
   const txHash = await send(ctx.contracts.podTestAsCoti, writeOpts);
   await ctx.sepolia.publicClient.waitForTransactionReceipt({ hash: txHash, ...receiptWaitOptions });
-  const request = await getLatestRequest(ctx.contracts.inboxSepolia);
+  const request = await getLatestRequest(ctx.contracts.inboxSepolia, ctx.chainIds.coti);
   const defaultGas =
     ctx.podContractName === "PodTest256"
       ? DEFAULT_COTI_MINE_GAS_MPC_256

@@ -250,9 +250,9 @@ describe(
       const gp = gasPriceWeiFromMinedTx(receipt, tx);
       logStep(`mined tx effective gas price (wei) used for expectations: ${gp}`);
 
-      const len = await inbox.read.getRequestsLen();
+      const len = await inbox.read.getRequestsLen([999n]);
       assert.equal(len, 1n);
-      const batch = await inbox.read.getRequests([0n, 1n]);
+      const batch = await inbox.read.getRequests([999n, 0n, 1n]);
       const requestId = batch[0].requestId as `0x${string}`;
       const req = await getRequestParsed(inbox, requestId);
 
@@ -304,7 +304,7 @@ describe(
       const tx = await publicClient.getTransaction({ hash: txHash });
       const gp = gasPriceWeiFromMinedTx(receipt, tx);
 
-      const batch2 = await inbox.read.getRequests([0n, 1n]);
+      const batch2 = await inbox.read.getRequests([998n, 0n, 1n]);
       const req = await getRequestParsed(inbox, batch2[0].requestId as `0x${string}`);
 
       const expectedCallerGas = CALLBACK_WEI_LOCAL_CONSTANT / gp;
@@ -471,7 +471,7 @@ describe(
         const gpMined = gasPriceWeiFromMinedTx(receipt, tx);
         logStep(`mined effective gas price (wei) = ${gpMined}`);
 
-        const batch = await inbox.read.getRequests([0n, 1n]);
+        const batch = await inbox.read.getRequests([777n, 0n, 1n]);
         const req = await getRequestParsed(inbox, batch[0].requestId as `0x${string}`);
 
         const expectedCallerGas = callerWeiEst / gpMined;

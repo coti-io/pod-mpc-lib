@@ -136,15 +136,30 @@ interface IInbox {
     /// @return response Response payload.
     function getInboxResponse(bytes32 requestId) external view returns (bytes memory);
 
-    /// @notice Return a slice of outbound requests in nonce order.
-    /// @param from Start index (0-based).
+    /// @notice Return a slice of outbound requests sent to `targetChainId`, in per-target nonce order.
+    /// @param targetChainId Destination chain whose outbound requests to read.
+    /// @param from Start index (0-based) within that target's sequence.
     /// @param len Maximum number of requests to return.
     /// @return requestsList Request structs.
-    function getRequests(uint256 from, uint256 len) external view returns (Request[] memory);
+    function getRequests(uint256 targetChainId, uint256 from, uint256 len)
+        external
+        view
+        returns (Request[] memory);
 
-    /// @notice Total count of outbound requests issued from this inbox.
-    /// @return count Number of requests.
-    function getRequestsLen() external view returns (uint256);
+    /// @notice Total count of outbound requests issued from this inbox to `targetChainId`.
+    /// @param targetChainId Destination chain.
+    /// @return count Number of requests to that target.
+    function getRequestsLen(uint256 targetChainId) external view returns (uint256);
+
+    /// @notice Look up a stored outbound request by its id (id encodes source+target+nonce).
+    /// @param requestId Outbound request id.
+    /// @return request The stored request (zeroed if unknown).
+    function getRequest(bytes32 requestId) external view returns (Request memory);
+
+    /// @notice Look up a stored incoming request by its id (id encodes the source chain).
+    /// @param requestId Incoming request id.
+    /// @return request The stored incoming request (zeroed if unknown).
+    function getIncomingRequest(bytes32 requestId) external view returns (Request memory);
 
     /// @notice Remote chain ID and contract for the currently executing incoming message.
     /// @return chainId Remote chain ID.
@@ -161,15 +176,23 @@ interface IInbox {
 
     // --- External: pure ---
 
-    /// @notice Pack chain ID and nonce (each up to 128 bits) into a request ID.
-    /// @param chainId Chain ID half.
-    /// @param nonce Nonce half.
-    /// @return requestId 256-bit packed ID.
-    function getRequestId(uint256 chainId, uint256 nonce) external pure returns (bytes32);
+    /// @notice Pack source chain id (64 bits), target chain id (64 bits) and nonce (128 bits) into a request id.
+    /// @param sourceChainId Originating chain id.
+    /// @param targetChainId Destination chain id.
+    /// @param nonce Per-target nonce.
+    /// @return requestId 256-bit packed id.
+    function getRequestId(uint256 sourceChainId, uint256 targetChainId, uint256 nonce)
+        external
+        pure
+        returns (bytes32);
 
-    /// @notice Split a packed request ID into chain ID and nonce.
-    /// @param requestId Packed ID.
-    /// @return chainId Chain ID half.
-    /// @return nonce Nonce half.
-    function unpackRequestId(bytes32 requestId) external pure returns (uint256 chainId, uint256 nonce);
+    /// @notice Split a packed request id into source chain id, target chain id and nonce.
+    /// @param requestId Packed id.
+    /// @return sourceChainId Source chain id.
+    /// @return targetChainId Target chain id.
+    /// @return nonce Per-target nonce.
+    function unpackRequestId(bytes32 requestId)
+        external
+        pure
+        returns (uint256 sourceChainId, uint256 targetChainId, uint256 nonce);
 }
