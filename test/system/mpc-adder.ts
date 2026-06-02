@@ -57,7 +57,7 @@ describe("MpcAdder (system)", async function () {
     logStep(`Test1: waiting for tx ${txHash}`);
     await ctx.sepolia.publicClient.waitForTransactionReceipt({ hash: txHash, ...receiptWaitOptions });
     logStep("Test1: tx confirmed, fetching latest request");
-    const request = await getLatestRequest(ctx.contracts.inboxSepolia);
+    const request = await getLatestRequest(ctx.contracts.inboxSepolia, ctx.chainIds.coti);
 
     const expectedSelector = toFunctionSelector("add64(uint256,uint256,address)");
     const encodedA = encodeAbiParameters(
@@ -124,7 +124,7 @@ describe("MpcAdder (system)", async function () {
     logStep(`Test2: waiting for tx ${txHash}`);
     await ctx.sepolia.publicClient.waitForTransactionReceipt({ hash: txHash, ...receiptWaitOptions });
     logStep("Test2: tx confirmed, loading latest request");
-    const request = await getLatestRequest(ctx.contracts.inboxSepolia);
+    const request = await getLatestRequest(ctx.contracts.inboxSepolia, ctx.chainIds.coti);
     const { requestIdUsed: cotiRequestId } = await mineRequest(ctx, "coti", BigInt(ctx.chainIds.sepolia), request, "Test2");
     logStep("Test2: COTI processed, fetching response");
 
@@ -193,7 +193,7 @@ describe("MpcAdder (system)", async function () {
     logStep(`Test3: waiting for tx ${txHash}`);
     await ctx.sepolia.publicClient.waitForTransactionReceipt({ hash: txHash, ...receiptWaitOptions });
     logStep("Test3: tx confirmed, loading latest request");
-    const request = await getLatestRequest(ctx.contracts.inboxSepolia);
+    const request = await getLatestRequest(ctx.contracts.inboxSepolia, ctx.chainIds.coti);
     const { requestIdUsed: cotiRequestId } = await mineRequest(
       ctx,
       "coti",

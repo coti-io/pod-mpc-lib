@@ -187,7 +187,7 @@ describe("PErc20 (system)", async function () {
     await ctx.sepolia.publicClient.waitForTransactionReceipt({ hash: txHash, ...receiptWaitOptions });
 
     logStep("Test: loading latest request");
-    const request = await getLatestRequest(ctx.contracts.inboxSepolia);
+    const request = await getLatestRequest(ctx.contracts.inboxSepolia, ctx.chainIds.coti);
     const requestId = request.requestId;
 
     logStep("Test: mining request on COTI");

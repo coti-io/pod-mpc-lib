@@ -76,7 +76,7 @@ export class RelayHelper {
       address: this.inbox1Address,
       abi: INBOX_ABI,
       functionName: "getRequestsLen",
-      args: [],
+      args: [BigInt(this.chain2Id)],
     });
 
     const total = Number(totalRequests);
@@ -91,7 +91,7 @@ export class RelayHelper {
       address: this.inbox1Address,
       abi: INBOX_ABI,
       functionName: "getRequests",
-      args: [BigInt(from), BigInt(take)],
+      args: [BigInt(this.chain2Id), BigInt(from), BigInt(take)],
     })) as any[];
     return requests.map((request) => ({
       requestId: this.getTupleField<`0x${string}`>(request, "requestId", 0),
@@ -213,7 +213,7 @@ export class RelayHelper {
       address: this.inbox1Address,
       abi: INBOX_ABI,
       functionName: "getRequestsLen",
-      args: [],
+      args: [BigInt(this.chain2Id)],
     });
 
     const total = Number(totalRequests);
@@ -228,7 +228,7 @@ export class RelayHelper {
       address: this.inbox1Address,
       abi: INBOX_ABI,
       functionName: "getRequests",
-      args: [BigInt(from), BigInt(take)],
+      args: [BigInt(this.chain2Id), BigInt(from), BigInt(take)],
     })) as any[];
     const latestMinedRequestId = (await this.chain2Client.readContract({
       address: this.inbox2Address,

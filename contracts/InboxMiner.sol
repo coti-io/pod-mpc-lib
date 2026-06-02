@@ -14,19 +14,26 @@ contract InboxMiner is InboxBase, MinerBase, IInboxMiner {
 
     /// @inheritdoc IInboxMiner
     function batchProcessRequests(uint256 sourceChainId, MinedRequest[] memory mined) external onlyMiner {
-        require(sourceChainId != chainId, "Inbox: sourceChainId cannot be this chain");
+        if (sourceChainId == chainId) {
+            revert SourceChainIsThisChain(chainId);
+        }
 
         uint256 allowedNonce = 1;
         if (lastIncomingRequestId[sourceChainId] != bytes32(0)) {
-            (, allowedNonce) = _unpackRequestId(lastIncomingRequestId[sourceChainId]);
+            (,, allowedNonce) = _unpackRequestId(lastIncomingRequestId[sourceChainId]);
             allowedNonce++;
         }
 
         for (uint256 i = 0; i < mined.length; i++) {
             MinedRequest memory minedRequest = mined[i];
             bytes32 requestId = minedRequest.requestId;
-            (uint256 minedChainId, uint256 minedNonce) = _unpackRequestId(requestId);
-            require(minedChainId == sourceChainId, "Inbox: requestId source chain mismatch");
+            (uint256 minedChainId, uint256 minedTargetChainId, uint256 minedNonce) = _unpackRequestId(requestId);
+            if (minedChainId != sourceChainId) {
+                revert RequestSourceChainMismatch(requestId, sourceChainId, minedChainId);
+            }
+            if (minedTargetChainId != chainId) {
+                revert RequestTargetChainMismatch(requestId, chainId, minedTargetChainId);
+            }
             require(minedNonce == allowedNonce, "Inbox: mined nonces must be contiguous");
             allowedNonce++;
             Request storage incomingRequest = incomingRequests[requestId];
@@ -99,7 +106,7 @@ contract InboxMiner is InboxBase, MinerBase, IInboxMiner {
             revert RequestIdRequired();
         }
         Request storage incomingRequest = incomingRequests[requestId];
-        (uint256 sourceChainId, ) = _unpackRequestId(requestId);
+        (uint256 sourceChainId,,) = _unpackRequestId(requestId);
         uint256 errorCode = errors[requestId].errorCode;
         if (!incomingRequest.executed || errorCode != ERROR_CODE_EXECUTION_FAILED) {
             revert RetryFailedRequestNotAFailedRequest();

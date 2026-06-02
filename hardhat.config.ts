@@ -40,9 +40,11 @@ export default defineConfig({
       chainType: "l1",
       blockExplorers: {
         etherscan: {
-          name: "Routescan (Fuji)",
-          url: "https://testnet.snowtrace.io",
-          apiUrl: "https://api.routescan.io/v2/network/testnet/evm/43113/etherscan/api",
+          name: "Snowscan (Fuji)",
+          url: "https://testnet.snowscan.xyz",
+          // Etherscan V2 multichain endpoint; `chainid=43113` routes to Snowscan
+          // (Etherscan's Avalanche deployment). Uses the single ETHERSCAN_API_KEY.
+          apiUrl: "https://api.etherscan.io/v2/api",
         },
       },
     },

@@ -126,17 +126,17 @@ describe("Millionaire (system)", async function () {
     assert.equal(existsBeforeA, false);
     assert.equal(existsBeforeB, false);
 
-    const countBefore = await ctx.contracts.inboxSepolia.read.getRequestsLen();
+    const countBefore = await ctx.contracts.inboxSepolia.read.getRequestsLen([BigInt(ctx.chainIds.coti)]);
     logStep(`${label}: sending reveal`);
     txHash = await millionaire.write.reveal(
       [walletA.account.address, walletB.account.address, ctx.podTwoWayFees.callbackFeeWei],
       podTwoWayWriteOptions(ctx.podTwoWayFees)
     );
     await ctx.sepolia.publicClient.waitForTransactionReceipt({ hash: txHash, ...receiptWaitOptions });
-    const countAfter = await ctx.contracts.inboxSepolia.read.getRequestsLen();
+    const countAfter = await ctx.contracts.inboxSepolia.read.getRequestsLen([BigInt(ctx.chainIds.coti)]);
     assert.equal(Number(countAfter), Number(countBefore) + 2);
 
-    const newRequests = await getRequests(ctx.contracts.inboxSepolia, Number(countBefore), 2);
+    const newRequests = await getRequests(ctx.contracts.inboxSepolia, ctx.chainIds.coti, Number(countBefore), 2);
     assert.equal(newRequests.length, 2);
 
     logStep(`${label}: mining 2 requests on COTI`);

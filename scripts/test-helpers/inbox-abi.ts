@@ -47,6 +47,7 @@ export const INBOX_ABI = [
     name: "getRequests",
     stateMutability: "view",
     inputs: [
+      { name: "targetChainId", type: "uint256" },
       { name: "from", type: "uint256" },
       { name: "len", type: "uint256" },
     ],
@@ -86,7 +87,7 @@ export const INBOX_ABI = [
     type: "function",
     name: "getRequestsLen",
     stateMutability: "view",
-    inputs: [],
+    inputs: [{ name: "targetChainId", type: "uint256" }],
     outputs: [{ name: "", type: "uint256" }],
   },
   {

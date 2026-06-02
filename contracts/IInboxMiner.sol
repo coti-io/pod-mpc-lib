@@ -9,6 +9,12 @@ interface IInboxMiner {
     error RetryFailedRequestNotAFailedRequest();
     error RequestIdRequired();
     error RetryFailedRequestExecutionFailed(bytes returnData);
+    /// @notice The `sourceChainId` passed to {batchProcessRequests} is this chain's own id.
+    error SourceChainIsThisChain(uint256 chainId);
+    /// @notice A mined request's encoded source chain does not match the batch `sourceChainId`.
+    error RequestSourceChainMismatch(bytes32 requestId, uint256 expectedSourceChainId, uint256 actualSourceChainId);
+    /// @notice A mined request's encoded target chain is not this chain.
+    error RequestTargetChainMismatch(bytes32 requestId, uint256 expectedTargetChainId, uint256 actualTargetChainId);
 
     /// @notice Emitted when {retryFailedRequest} successfully re-executes a previously failed incoming request.
     event RetryFailedRequestSuccess(bytes32 indexed requestId);

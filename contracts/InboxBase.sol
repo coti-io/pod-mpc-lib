@@ -12,19 +12,23 @@ contract InboxBase is IInbox, InboxFeeManager {
     /// @notice This chain's ID (deploy-time; may differ from `block.chainid` when `_chainId` is non-zero).
     uint256 public chainId;
 
-    /// @notice Outbound requests by request id.
+    /// @notice Outbound requests by request id. The id encodes both source and target chain ids,
+    /// so it is globally unique even though nonces are tracked per target chain.
     mapping(bytes32 => Request) public requests;
     /// @notice Responses sent for incoming request ids.
     mapping(bytes32 => Response) public inboxResponses;
     /// @notice Execution or encoding errors by request id.
     mapping(bytes32 => Error) public errors;
-    /// @notice Incoming requests mined from remote chains.
+    /// @notice Incoming requests mined from remote chains, by request id (id encodes the source chain).
     mapping(bytes32 => Request) public incomingRequests;
     /// @notice Last contiguous incoming request id processed for each source chain.
     mapping(uint256 => bytes32) public lastIncomingRequestId;
 
     ExecutionContext internal _currentContext;
-    uint256 internal _requestNonce;
+    /// @notice Per-target outbound nonce: `targetChainId => number of requests sent to that chain`.
+    /// @dev Per-target so the sequence each target receives is contiguous (1,2,3,...) even when this
+    /// chain sends to several targets, which is what the miner's contiguity guard relies on.
+    mapping(uint256 => uint256) internal _requestNonce;
 
     /// @dev One-time initialization guard for {_initInboxBase}.
     bool private _initialized;
@@ -196,12 +200,16 @@ contract InboxBase is IInbox, InboxFeeManager {
     }
 
     /// @inheritdoc IInbox
-    function getRequests(uint256 from, uint256 len) external view returns (Request[] memory) {
+    function getRequests(uint256 targetChainId, uint256 from, uint256 len)
+        external
+        view
+        returns (Request[] memory)
+    {
         if (len == 0) {
             return new Request[](0);
         }
 
-        uint256 total = _requestNonce;
+        uint256 total = _requestNonce[targetChainId];
         if (total == 0 || from >= total) {
             return new Request[](0);
         }
@@ -216,7 +224,7 @@ contract InboxBase is IInbox, InboxFeeManager {
 
         for (uint256 i = 0; i < actualLen; i++) {
             uint256 nonce = from + i + 1;
-            bytes32 requestId = _packRequestId(chainId, nonce);
+            bytes32 requestId = _packRequestId(chainId, targetChainId, nonce);
             result[i] = requests[requestId];
         }
 
@@ -224,8 +232,18 @@ contract InboxBase is IInbox, InboxFeeManager {
     }
 
     /// @inheritdoc IInbox
-    function getRequestsLen() external view returns (uint256) {
-        return _requestNonce;
+    function getRequestsLen(uint256 targetChainId) external view returns (uint256) {
+        return _requestNonce[targetChainId];
+    }
+
+    /// @inheritdoc IInbox
+    function getRequest(bytes32 requestId) external view returns (Request memory) {
+        return requests[requestId];
+    }
+
+    /// @inheritdoc IInbox
+    function getIncomingRequest(bytes32 requestId) external view returns (Request memory) {
+        return incomingRequests[requestId];
     }
 
     /// @inheritdoc IInbox
@@ -249,12 +267,20 @@ contract InboxBase is IInbox, InboxFeeManager {
     }
 
     /// @inheritdoc IInbox
-    function getRequestId(uint256 chainId_, uint256 nonce) external pure returns (bytes32) {
-        return _packRequestId(chainId_, nonce);
+    function getRequestId(uint256 sourceChainId, uint256 targetChainId, uint256 nonce)
+        external
+        pure
+        returns (bytes32)
+    {
+        return _packRequestId(sourceChainId, targetChainId, nonce);
     }
 
     /// @inheritdoc IInbox
-    function unpackRequestId(bytes32 requestId) external pure returns (uint256 chainId_, uint256 nonce) {
+    function unpackRequestId(bytes32 requestId)
+        external
+        pure
+        returns (uint256 sourceChainId, uint256 targetChainId, uint256 nonce)
+    {
         return _unpackRequestId(requestId);
     }
 
@@ -325,9 +351,9 @@ contract InboxBase is IInbox, InboxFeeManager {
         require(targetChainId != chainId, "Inbox: cannot send to same chain");
         require(targetContract != address(0), "Inbox: invalid target contract");
 
-        ++_requestNonce;
+        uint256 nonce = ++_requestNonce[targetChainId];
 
-        bytes32 requestId = _packRequestId(chainId, _requestNonce);
+        bytes32 requestId = _packRequestId(chainId, targetChainId, nonce);
 
         Request memory request = Request({
             requestId: requestId,
@@ -352,17 +378,32 @@ contract InboxBase is IInbox, InboxFeeManager {
         return requestId;
     }
 
-    /// @dev Packs `chainId` and `nonce` (each 128 bits) into a `bytes32` request ID.
-    function _packRequestId(uint256 chainId_, uint256 nonce) internal pure returns (bytes32) {
-        require(chainId_ <= type(uint128).max, "Inbox: chainId too large");
+    /// @dev Packs source chain id (64 bits), target chain id (64 bits) and nonce (128 bits) into a
+    /// `bytes32` request id. Encoding both chain ids makes the id globally unique and lets either
+    /// side recover its routing from the id alone.
+    function _packRequestId(uint256 sourceChainId, uint256 targetChainId, uint256 nonce)
+        internal
+        pure
+        returns (bytes32)
+    {
+        require(sourceChainId <= type(uint64).max, "Inbox: sourceChainId too large");
+        require(targetChainId <= type(uint64).max, "Inbox: targetChainId too large");
         require(nonce <= type(uint128).max, "Inbox: nonce too large");
-        return bytes32((uint256(uint128(chainId_)) << 128) | uint256(uint128(nonce)));
+        return bytes32(
+            (uint256(uint64(sourceChainId)) << 192) | (uint256(uint64(targetChainId)) << 128)
+                | uint256(uint128(nonce))
+        );
     }
 
-    /// @dev Unpacks a request ID from {_packRequestId}.
-    function _unpackRequestId(bytes32 requestId) internal pure returns (uint256 chainId_, uint256 nonce) {
+    /// @dev Unpacks a request id from {_packRequestId} into source chain id, target chain id and nonce.
+    function _unpackRequestId(bytes32 requestId)
+        internal
+        pure
+        returns (uint256 sourceChainId, uint256 targetChainId, uint256 nonce)
+    {
         uint256 packed = uint256(requestId);
-        chainId_ = uint256(uint128(packed >> 128));
+        sourceChainId = uint256(uint64(packed >> 192));
+        targetChainId = uint256(uint64(packed >> 128));
         nonce = uint256(uint128(packed));
     }
 
@@ -408,10 +449,5 @@ contract InboxBase is IInbox, InboxFeeManager {
         });
         errors[requestId] = err;
         emit ErrorReceived(requestId, ERROR_CODE_ENCODE_FAILED, errorMessage);
-    }
-
-    /// @dev Original sender for an outbound `requestId`.
-    function _getOriginalSender(bytes32 requestId) internal view returns (address) {
-        return requests[requestId].originalSender;
     }
 }
