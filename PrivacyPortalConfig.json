@@ -76,37 +76,6 @@
         }
       ]
     },
-    "avalancheFuji": {
-      "chainId": 43113,
-      "privacyPortal": {
-        "factory": "0x862e0f72266e6a06719c7118eef1ff289aeb0100",
-        "portalImplementation": "0x36348244cd243ceda5dea46303ffcd26ecd40102",
-        "podTokenImplementation": "0x18f4945336a94be43221fb3c97411739e4bbe63b",
-        "inbox": "0xB4A53FE02401fDFA8DAc00450dA3FfF8D01502F8",
-        "cotiNetwork": "cotiTestnet",
-        "cotiChainId": 7082400
-      },
-      "tokens": [
-        {
-          "erc20": "0x328e70e1c52662cd5f19f824fcb8b463d77a6686",
-          "name": "Private MyTestToken",
-          "symbol": "pMTT",
-          "decimals": 18,
-          "privacyPortal": "0x248DF7c9f68c6d8aEFa88Ec218c53f0E6Da6dC81",
-          "pToken": "0x53a5A16f3BC408CB808B442fA69481386945f5cf",
-          "cotiSide": "0x3aB7B2e8ABe950F9551A98293eaE4c26B8fBdaf2"
-        },
-        {
-          "erc20": "0xa56ea551d6abd4ff5a94677895117d286bc1f1cf",
-          "name": "Private Test USDC",
-          "symbol": "p.tUSDC",
-          "decimals": 6,
-          "privacyPortal": "0xe81fF0e2c1006B61176A89D9B7F7ba9cba4f3fC7",
-          "pToken": "0x70f584c9be407898dE529F13a6299d64B2D389E7",
-          "cotiSide": "0x0543f585d24057F246B264413dc92a1e7abD0248"
-        }
-      ]
-    },
     "cotiTestnet": {
       "chainId": 7082400,
       "privacyPortal": {
