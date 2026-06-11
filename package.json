@@ -19,8 +19,7 @@
     "deploy:examples:coti": "hardhat run scripts/deploy-examples-coti.ts",
     "deploy:privacy:factories": "hardhat run scripts/privacyPortal/deploy-factories.ts",
     "deploy:privacy:source-factory": "hardhat run scripts/privacyPortal/deploy-source-factory.ts",
-    "deploy:privacy:coti-factory": "hardhat run scripts/privacyPortal/deploy-coti-factory.ts",
-    "deploy:privacy:coti-ptoken": "hardhat run scripts/privacyPortal/deploy-coti-ptoken.ts",
+    "deploy:privacy:coti-mother": "hardhat run scripts/privacyPortal/deploy-coti-mother.ts",
     "deploy:privacy:source-portal": "hardhat run scripts/privacyPortal/deploy-source-portal.ts",
     "deploy:privacy:token": "hardhat run scripts/privacyPortal/deploy-token.ts",
     "deploy:privacy:sync": "hardhat run scripts/privacyPortal/sync-token-list.ts",
@@ -31,6 +30,9 @@
     "test:inbox": "hardhat test test/Inbox.ts",
     "test:inbox-raise": "hardhat test test/system/inbox-raise.ts",
     "test:pod-token": "POD_TOKEN_SYSTEM_TESTS=1 hardhat test test/tokens/pod-token.ts",
+    "test:pod-token-late-onboard": "POD_TOKEN_LATE_ONBOARD_TESTS=1 hardhat test test/tokens/pod-token-late-onboard.ts",
+    "investigate:offboard-to-user": "OFFBOARD_TO_USER_INVESTIGATION=1 hardhat test test/tokens/offboard-to-user-investigation.ts",
+    "test:pp-system": "PP_SYSTEM_TESTS=1 hardhat test test/privacy/privacy-portal-system.ts",
     "relay": "tsx scripts/relay-node.ts"
   },
   "devDependencies": {

@@ -4,16 +4,20 @@ pragma solidity ^0.8.19;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/proxy/Clones.sol";
 
+import "../IInbox.sol";
 import "../token/perc20/PodErc20MintableInitializable.sol";
+import "../token/perc20/cotiside/PodErc20CotiMother.sol";
 import "./IPrivacyPortal.sol";
 
 /// @title PrivacyPortalFactory
 /// @notice Deploys one-shot minimal-clone portals and pTokens for public ERC20 collateral.
 contract PrivacyPortalFactory is Ownable {
-    /// @notice Source-chain inbox used by pToken clones.
+    /// @notice Source-chain inbox used by pToken clones and registration messages.
     address public immutable inbox;
     /// @notice COTI chain id used by pToken clones for remote MPC execution.
     uint256 public immutable cotiChainId;
+    /// @notice Unified COTI-side pToken ledger all clones talk to.
+    address public immutable cotiMotherContract;
     /// @notice Clone implementation for source-chain pTokens.
     address public immutable podTokenImplementation;
     /// @notice Clone implementation for portals.
@@ -39,9 +43,11 @@ contract PrivacyPortalFactory is Ownable {
         address indexed underlying,
         address indexed portal,
         address indexed pToken,
-        address cotiSideToken,
+        address cotiMotherContract,
         uint8 decimals
     );
+    /// @notice One-way registration message submitted to the COTI mother contract.
+    event TokenRegistrationRequested(address indexed pToken, bytes32 indexed requestId);
 
     /// @notice Caller is not an allowlisted deployer.
     error OnlyDeployer(address caller);
@@ -61,23 +67,27 @@ contract PrivacyPortalFactory is Ownable {
     /// @param initialOwner Owner and initial deployer.
     /// @param inbox_ Source-chain inbox used by pToken clones.
     /// @param cotiChainId_ COTI chain id used by pToken clones.
+    /// @param cotiMotherContract_ Unified COTI-side pToken ledger.
     /// @param podTokenImplementation_ Clone implementation for source-chain pTokens.
     /// @param portalImplementation_ Clone implementation for portals.
     constructor(
         address initialOwner,
         address inbox_,
         uint256 cotiChainId_,
+        address cotiMotherContract_,
         address podTokenImplementation_,
         address portalImplementation_
     ) Ownable(initialOwner) {
         if (
             initialOwner == address(0) || inbox_ == address(0) || cotiChainId_ == 0
-                || podTokenImplementation_ == address(0) || portalImplementation_ == address(0)
+                || cotiMotherContract_ == address(0) || podTokenImplementation_ == address(0)
+                || portalImplementation_ == address(0)
         ) {
             revert InvalidAddress();
         }
         inbox = inbox_;
         cotiChainId = cotiChainId_;
+        cotiMotherContract = cotiMotherContract_;
         podTokenImplementation = podTokenImplementation_;
         portalImplementation = portalImplementation_;
         deployers[initialOwner] = true;
@@ -102,9 +112,8 @@ contract PrivacyPortalFactory is Ownable {
         emit WithdrawalsPausedUpdated(paused);
     }
 
-    /// @notice Deploy a portal and pToken clone for an underlying token.
+    /// @notice Deploy a portal and pToken clone for an underlying token and register on the COTI mother ledger.
     /// @param underlying Public ERC20 collateral token.
-    /// @param cotiSideToken COTI-side pToken ledger paired to the source pToken.
     /// @param name Source pToken name.
     /// @param symbol Source pToken symbol.
     /// @param decimals Token decimals.
@@ -113,13 +122,12 @@ contract PrivacyPortalFactory is Ownable {
     /// @return pToken Deployed source-chain pToken clone.
     function createPortal(
         address underlying,
-        address cotiSideToken,
         string calldata name,
         string calldata symbol,
         uint8 decimals,
         address portalOwner
-    ) external onlyDeployer returns (address portal, address pToken) {
-        if (underlying == address(0) || cotiSideToken == address(0) || portalOwner == address(0)) {
+    ) external payable onlyDeployer returns (address portal, address pToken) {
+        if (underlying == address(0) || portalOwner == address(0)) {
             revert InvalidAddress();
         }
         if (portalForUnderlying[underlying] != address(0)) {
@@ -133,7 +141,7 @@ contract PrivacyPortalFactory is Ownable {
             portal,
             cotiChainId,
             inbox,
-            cotiSideToken,
+            cotiMotherContract,
             name,
             symbol,
             decimals
@@ -144,6 +152,28 @@ contract PrivacyPortalFactory is Ownable {
         pTokenForUnderlying[underlying] = pToken;
         portalForPToken[pToken] = portal;
 
-        emit PortalCreated(underlying, portal, pToken, cotiSideToken, decimals);
+        bytes32 requestId = _requestMotherRegistration(pToken, name, symbol, decimals);
+
+        emit PortalCreated(underlying, portal, pToken, cotiMotherContract, decimals);
+        emit TokenRegistrationRequested(pToken, requestId);
+    }
+
+    /// @dev Submits a one-way inbox message to register `pToken` on the COTI mother contract.
+    function _requestMotherRegistration(
+        address pToken,
+        string calldata name,
+        string calldata symbol,
+        uint8 decimals
+    ) private returns (bytes32 requestId) {
+        IInbox.MpcMethodCall memory methodCall = IInbox.MpcMethodCall({
+            selector: bytes4(0),
+            data: abi.encodeWithSelector(PodErc20CotiMother.registerToken.selector, pToken, name, symbol, decimals),
+            datatypes: new bytes8[](0),
+            datalens: new bytes32[](0)
+        });
+
+        requestId = IInbox(inbox).sendOneWayMessage{value: msg.value}(
+            cotiChainId, cotiMotherContract, methodCall, bytes4(0)
+        );
     }
 }

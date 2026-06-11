@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import { network } from "hardhat";
@@ -80,12 +81,22 @@ type Target = {
 // --- deployConfig.json helpers (flexible shape; preserves unknown keys) ---
 
 const readCfg = async (): Promise<any> => JSON.parse(await fs.readFile(deployConfigPath, "utf8"));
+/** Synchronous read used by `verifyArgs` (which must return constructor args synchronously). */
+const readCfgSync = (): any => JSON.parse(readFileSync(deployConfigPath, "utf8"));
 const writeCfg = async (cfg: any): Promise<void> =>
   fs.writeFile(deployConfigPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
 const chainEntry = (cfg: any, chainId: number): Record<string, any> => {
   cfg.chains ??= {};
   cfg.chains[String(chainId)] ??= {};
   return cfg.chains[String(chainId)];
+};
+const chainCfgSync = (chainId: number): Record<string, any> =>
+  readCfgSync().chains?.[String(chainId)] ?? {};
+
+/** Factory owner for PrivacyPortal deployments: `FACTORY_OWNER` env if set, else the deployer. */
+const factoryOwner = (ctx: DeployCtx): Address => {
+  const raw = optionalEnv("FACTORY_OWNER");
+  return raw ? asAddress(raw, "FACTORY_OWNER") : ctx.deployer;
 };
 
 const getInbox = (ctx: DeployCtx) =>
@@ -104,6 +115,10 @@ const deploySimple = async (ctx: DeployCtx, name: string, args: unknown[]): Prom
 
 const COTI_TESTNET_CHAIN_ID = 7082400n;
 const COTI_MAINNET_CHAIN_ID = 2632500n;
+
+/** COTI chain id a given source chain pairs with (mainnet -> COTI mainnet, otherwise COTI testnet). */
+const pairedCotiChainId = (ctx: DeployCtx): bigint =>
+  ctx.chainId === 1 ? COTI_MAINNET_CHAIN_ID : COTI_TESTNET_CHAIN_ID;
 
 /** Resolve the COTI chain id this source chain pairs with and its recorded MPC executor address. */
 const resolveCotiExecutor = async (
@@ -186,6 +201,206 @@ const feeEq = (a: FeeTuple, b: Record<string, bigint>): boolean =>
   FEE_FIELDS.every((f) => a[f] === b[f]);
 
 const feeIsZero = (a: FeeTuple): boolean => FEE_FIELDS.every((f) => a[f] === 0n);
+
+// --- PrivacyPortal test-token wiring ---
+
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+
+/** True for a syntactically valid, non-zero address string. */
+const isAddr = (v: unknown): v is Address =>
+  typeof v === "string" && /^0x[0-9a-fA-F]{40}$/.test(v) && v.toLowerCase() !== ZERO_ADDRESS;
+
+/**
+ * Registry of PrivacyPortal test tokens. Static params live here (single source of truth); the
+ * per-source-chain underlying ERC20 and deployed clone addresses are recorded in deployConfig
+ * (data-driven). Add a token by appending to `PP_TOKENS`.
+ *
+ * All source pTokens share one COTI-side mother ledger. deployConfig layout:
+ *   chains[<coti>].cotiMother
+ *   chains[<source>].privacyPortalTokens[key] = { underlying, portal, pToken }
+ */
+type PpToken = {
+  /** deployConfig key under `privacyPortalTokens` and the private pToken identity. */
+  key: string;
+  /** Private (pToken) name + symbol minted on each source chain. */
+  pName: string;
+  pSymbol: string;
+  /** Shared decimals for the underlying collateral and the pToken. */
+  decimals: number;
+  /** Public underlying ERC20 name/symbol used when deploying a mock collateral token (testnets). */
+  underlyingName: string;
+  underlyingSymbol: string;
+  /** Source chains this token is wired on; each pairs with its `cotiChainForSource`. */
+  sources: number[];
+};
+
+/** Short labels for chains used in menu target names. */
+const SOURCE_LABEL: Record<number, string> = {
+  1: "Eth",
+  11155111: "Sep",
+  43113: "Avax",
+};
+const srcLabel = (chainId: number): string => SOURCE_LABEL[chainId] ?? String(chainId);
+
+const PP_TOKENS: PpToken[] = [
+  {
+    key: "pMTT",
+    pName: "Private MyTestToken",
+    pSymbol: "pMTT",
+    decimals: 18,
+    underlyingName: "MyTestToken",
+    underlyingSymbol: "MTT",
+    sources: [11155111, 43113],
+  },
+  {
+    key: "ptUSDC",
+    pName: "Private Test USDC",
+    pSymbol: "p.tUSDC",
+    decimals: 6,
+    underlyingName: "Test USDC",
+    underlyingSymbol: "tUSDC",
+    sources: [43113],
+  },
+];
+
+/** COTI chain a given source chain pairs with (mainnet -> COTI mainnet, otherwise COTI testnet). */
+const cotiChainForSource = (sourceChainId: number): number =>
+  sourceChainId === 1 ? Number(COTI_MAINNET_CHAIN_ID) : Number(COTI_TESTNET_CHAIN_ID);
+
+/** Source-side token entry `{ underlying?, portal?, pToken? }` from deployConfig. */
+const readSourceToken = (sourceChainId: number, key: string): Record<string, any> =>
+  readCfgSync().chains?.[String(sourceChainId)]?.privacyPortalTokens?.[key] ?? {};
+
+/** COTI mother contract address from deployConfig. */
+const readCotiMother = (cotiChainId: number | bigint): string | undefined =>
+  readCfgSync().chains?.[String(cotiChainId)]?.cotiMother;
+
+/** Persist a field on the source-side token entry under `chains[source].privacyPortalTokens[key]`. */
+const recordSourceTokenField = async (
+  sourceChainId: number,
+  key: string,
+  field: string,
+  value: string
+): Promise<void> => {
+  const cfg = await readCfg();
+  const entry = chainEntry(cfg, sourceChainId);
+  entry.privacyPortalTokens ??= {};
+  entry.privacyPortalTokens[key] ??= {};
+  entry.privacyPortalTokens[key][field] = value;
+  await writeCfg(cfg);
+};
+
+/**
+ * Build PrivacyPortal wiring targets for every token in `PP_TOKENS`:
+ *   - Source side (per token): an underlying (mock collateral) target and a portal target, each
+ *     operating on whichever of the token's source chains is currently connected.
+ */
+const buildPpTokenTargets = (): Target[] => {
+  const targets: Target[] = [];
+
+  for (const t of PP_TOKENS) {
+    targets.push({
+      id: `ppUnderlying:${t.key}`,
+      label: `${t.underlyingSymbol} ERC20`,
+      kind: "action",
+      roles: ["source"],
+      dependsOn: [],
+      status: async (ctx) => {
+        if (!t.sources.includes(ctx.chainId)) return { applied: false, detail: "n/a on this chain" };
+        const underlying = readSourceToken(ctx.chainId, t.key).underlying;
+        return isAddr(underlying)
+          ? { applied: true, detail: underlying }
+          : { applied: false, detail: "not deployed (mock)" };
+      },
+      run: async (ctx) => {
+        if (!t.sources.includes(ctx.chainId)) {
+          throw new Error(`Chain ${ctx.chainId} is not a configured source for ${t.key}.`);
+        }
+        const existing = readSourceToken(ctx.chainId, t.key).underlying;
+        if (isAddr(existing)) {
+          console.log(`  ${t.key} underlying already set: ${existing}`);
+          return;
+        }
+        const addr = await deploySimple(ctx, "MockERC20Decimals", [
+          t.underlyingName,
+          t.underlyingSymbol,
+          t.decimals,
+        ]);
+        const token = await ctx.viem.getContractAt("MockERC20Decimals", addr, {
+          client: { public: ctx.publicClient, wallet: ctx.walletClient },
+        });
+        const mintAmount = 1_000_000n * 10n ** BigInt(t.decimals);
+        const mintHash = await token.write.mint([ctx.deployer, mintAmount], { account: ctx.deployer });
+        await waitMined(ctx.publicClient, mintHash);
+        await recordSourceTokenField(ctx.chainId, t.key, "underlying", addr);
+        console.log(`  ${t.key} underlying (${t.underlyingSymbol}, ${t.decimals}d) deployed: ${addr}`);
+        console.log(`  Minted 1,000,000 ${t.underlyingSymbol} to ${ctx.deployer}`);
+        console.log(`  Recorded deployConfig.chains.${ctx.chainId}.privacyPortalTokens.${t.key}.underlying`);
+      },
+    });
+
+    targets.push({
+      id: `ppPortal:${t.key}`,
+      label: `${t.pSymbol} portal`,
+      kind: "action",
+      roles: ["source"],
+      dependsOn: ["ppPortalFactory"],
+      status: async (ctx) => {
+        if (!t.sources.includes(ctx.chainId)) return { applied: false, detail: "n/a on this chain" };
+        const entry = readSourceToken(ctx.chainId, t.key);
+        const cotiMother = readCotiMother(pairedCotiChainId(ctx));
+        if (!isAddr(cotiMother)) return { applied: false, detail: "needs COTI mother" };
+        if (!isAddr(entry.underlying)) return { applied: false, detail: `set ${t.underlyingSymbol} underlying first` };
+        if (!isAddr(entry.portal) || !isAddr(entry.pToken)) {
+          return { applied: false, detail: "ready to create" };
+        }
+        const mother = await ctx.viem.getContractAt("PodErc20CotiMother", cotiMother as Address, {
+          client: { public: ctx.publicClient, wallet: ctx.walletClient },
+        });
+        const registered = await mother.read.isRegistered([BigInt(ctx.chainId), entry.pToken]);
+        return registered
+          ? { applied: true, detail: `portal ${entry.portal}` }
+          : { applied: false, detail: "awaiting mother registration" };
+      },
+      run: async (ctx) => {
+        if (!t.sources.includes(ctx.chainId)) {
+          throw new Error(`Chain ${ctx.chainId} is not a configured source for ${t.key}.`);
+        }
+        const entry = readSourceToken(ctx.chainId, t.key);
+        const underlying = asAddress(
+          entry.underlying,
+          `chains.${ctx.chainId}.privacyPortalTokens.${t.key}.underlying`
+        );
+        const factoryAddr = asAddress(chainCfgSync(ctx.chainId).privacyPortalFactory, "privacyPortalFactory");
+        const factory = await ctx.viem.getContractAt("PrivacyPortalFactory", factoryAddr, {
+          client: { public: ctx.publicClient, wallet: ctx.walletClient },
+        });
+
+        let portal = (await factory.read.portalForUnderlying([underlying])) as Address;
+        let pToken = (await factory.read.pTokenForUnderlying([underlying])) as Address;
+        if (!isAddr(portal)) {
+          const hash = await factory.write.createPortal(
+            [underlying, t.pName, t.pSymbol, t.decimals, factoryOwner(ctx)],
+            { account: ctx.deployer, value: 1_000_000_000_000_000n }
+          );
+          await waitMined(ctx.publicClient, hash);
+          portal = (await factory.read.portalForUnderlying([underlying])) as Address;
+          pToken = (await factory.read.pTokenForUnderlying([underlying])) as Address;
+          console.log(`  ${t.key} registration requested on COTI mother for pToken=${pToken}`);
+        } else {
+          console.log(`  ${t.key} portal already exists at factory: ${portal}`);
+        }
+
+        await recordSourceTokenField(ctx.chainId, t.key, "portal", portal);
+        await recordSourceTokenField(ctx.chainId, t.key, "pToken", pToken);
+        console.log(`  ${t.key} (${srcLabel(ctx.chainId)}) portal=${portal} pToken=${pToken}`);
+        console.log(`  Recorded deployConfig.chains.${ctx.chainId}.privacyPortalTokens.${t.key}`);
+      },
+    });
+  }
+
+  return targets;
+};
 
 // --- Target registry ---
 
@@ -358,6 +573,134 @@ const TARGETS: Target[] = [
     deploy: (ctx) => deploySimple(ctx, "Millionaire", [ctx.inboxAddress]),
     verifyArgs: (ctx) => [ctx.inboxAddress],
   },
+
+  // --- PrivacyPortal: COTI side (unified mother ledger) ---
+  {
+    id: "ppCotiMother",
+    label: "PpCotiMother",
+    kind: "contract",
+    contractName: "PodErc20CotiMother",
+    roles: ["coti"],
+    dependsOn: ["inbox"],
+    configKey: "cotiMother",
+    resolveAddress: (_ctx, chainCfg) => chainCfg.cotiMother || undefined,
+    deploy: (ctx) => deploySimple(ctx, "PodErc20CotiMother", [ctx.inboxAddress, factoryOwner(ctx)]),
+    verifyArgs: (ctx) => [ctx.inboxAddress, factoryOwner(ctx)],
+  },
+  {
+    id: "ppCotiMotherAllowlist",
+    label: "PpMotherAllow",
+    kind: "action",
+    roles: ["coti"],
+    dependsOn: ["ppCotiMother"],
+    status: async (ctx) => {
+      const motherAddr = chainCfgSync(ctx.chainId).cotiMother;
+      if (!isAddr(motherAddr)) return { applied: false, detail: "needs COTI mother" };
+      const mother = await ctx.viem.getContractAt("PodErc20CotiMother", motherAddr as Address, {
+        client: { public: ctx.publicClient, wallet: ctx.walletClient },
+      });
+      const missing: string[] = [];
+      for (const net of DEPLOY_NETWORKS.filter((n) => n.role === "source")) {
+        const factory = chainCfgSync(net.chainId).privacyPortalFactory;
+        if (!isAddr(factory)) continue;
+        const allowed = await mother.read.allowedFactories([BigInt(net.chainId), factory]);
+        if (!allowed) missing.push(`${net.label}`);
+      }
+      return missing.length === 0
+        ? { applied: true, detail: "all factories allowlisted" }
+        : { applied: false, detail: `missing: ${missing.join(", ")}` };
+    },
+    run: async (ctx) => {
+      const motherAddr = asAddress(chainCfgSync(ctx.chainId).cotiMother, "cotiMother");
+      const mother = await ctx.viem.getContractAt("PodErc20CotiMother", motherAddr, {
+        client: { public: ctx.publicClient, wallet: ctx.walletClient },
+      });
+      for (const net of DEPLOY_NETWORKS.filter((n) => n.role === "source")) {
+        const factory = chainCfgSync(net.chainId).privacyPortalFactory;
+        if (!isAddr(factory)) {
+          console.log(`  skip ${net.label}: no privacyPortalFactory in deployConfig`);
+          continue;
+        }
+        const allowed = await mother.read.allowedFactories([BigInt(net.chainId), factory]);
+        if (allowed) {
+          console.log(`  ${net.label} factory already allowlisted: ${factory}`);
+          continue;
+        }
+        const hash = await mother.write.setAllowedFactory([BigInt(net.chainId), factory, true], {
+          account: ctx.deployer,
+        });
+        await waitMined(ctx.publicClient, hash);
+        console.log(`  allowlisted ${net.label} factory=${factory}`);
+      }
+    },
+  },
+
+  // --- PrivacyPortal: source side (clone implementations + factory) ---
+  {
+    id: "ppPortalImpl",
+    label: "PpPortalImpl",
+    kind: "contract",
+    contractName: "PrivacyPortal",
+    roles: ["source"],
+    dependsOn: [],
+    configKey: "portalImplementation",
+    resolveAddress: (_ctx, chainCfg) => chainCfg.portalImplementation || undefined,
+    deploy: (ctx) => deploySimple(ctx, "PrivacyPortal", []),
+    verifyArgs: () => [],
+  },
+  {
+    id: "ppTokenImpl",
+    label: "PpTokenImpl",
+    kind: "contract",
+    contractName: "PodErc20MintableInitializable",
+    roles: ["source"],
+    dependsOn: [],
+    configKey: "podTokenImplementation",
+    resolveAddress: (_ctx, chainCfg) => chainCfg.podTokenImplementation || undefined,
+    deploy: (ctx) => deploySimple(ctx, "PodErc20MintableInitializable", []),
+    verifyArgs: () => [],
+  },
+  {
+    id: "ppPortalFactory",
+    label: "PpFactory",
+    kind: "contract",
+    contractName: "PrivacyPortalFactory",
+    roles: ["source"],
+    dependsOn: ["inbox", "ppPortalImpl", "ppTokenImpl"],
+    configKey: "privacyPortalFactory",
+    resolveAddress: (_ctx, chainCfg) => chainCfg.privacyPortalFactory || undefined,
+    deploy: async (ctx) => {
+      const chainCfg = chainCfgSync(ctx.chainId);
+      const portalImpl = asAddress(chainCfg.portalImplementation, "portalImplementation");
+      const podTokenImpl = asAddress(chainCfg.podTokenImplementation, "podTokenImplementation");
+      const cotiMother = asAddress(
+        readCotiMother(pairedCotiChainId(ctx)),
+        `chains.${pairedCotiChainId(ctx)}.cotiMother`
+      );
+      return deploySimple(ctx, "PrivacyPortalFactory", [
+        factoryOwner(ctx),
+        ctx.inboxAddress,
+        pairedCotiChainId(ctx),
+        cotiMother,
+        podTokenImpl,
+        portalImpl,
+      ]);
+    },
+    verifyArgs: (ctx) => {
+      const chainCfg = chainCfgSync(ctx.chainId);
+      return [
+        factoryOwner(ctx),
+        ctx.inboxAddress,
+        String(pairedCotiChainId(ctx)),
+        readCotiMother(pairedCotiChainId(ctx)) ?? "",
+        chainCfg.podTokenImplementation,
+        chainCfg.portalImplementation,
+      ];
+    },
+  },
+
+  // --- PrivacyPortal test-token wiring (per token, per source chain; clones via the factories) ---
+  ...buildPpTokenTargets(),
 ];
 
 // --- Status computation ---
@@ -626,6 +969,30 @@ const main = async () => {
     deployer,
     inboxAddress,
   };
+
+  // Non-interactive batch mode: `DEPLOY_CLI_NETWORK=<net> DEPLOY_CLI_TARGETS=id1,id2 npm run deploy:cli`.
+  // Runs the listed target ids in order (re-reading status between each so dependency gating and
+  // freshly recorded addresses stay accurate). Useful for scripted/CI deploys.
+  const targetsEnv = optionalEnv("DEPLOY_CLI_TARGETS");
+  if (targetsEnv) {
+    const ids = targetsEnv.split(",").map((s) => s.trim()).filter(Boolean);
+    console.log(`Batch mode on ${net.label} (chainId ${chainId}) -> ${ids.join(", ")}`);
+    for (const id of ids) {
+      const statuses = await gatherStatuses(ctx, net.role);
+      const s = statuses.find((st) => st.target.id === id);
+      if (!s) {
+        console.error(`  Unknown target "${id}" for role "${net.role}"; skipping.`);
+        continue;
+      }
+      if (s.blockedBy.length) {
+        console.error(`  Target "${id}" blocked by: ${s.blockedBy.join(", ")}; skipping.`);
+        continue;
+      }
+      await runTarget(ctx, s);
+    }
+    console.log("Batch mode done.");
+    return;
+  }
 
   // Main interactive loop: recompute status each pass so dependency gating stays accurate.
   // eslint-disable-next-line no-constant-condition

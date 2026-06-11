@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { encodePacked, getAddress, keccak256, zeroAddress, zeroHash, type PublicClient, type WalletClient } from "viem";
+import { deployInboxWithInit } from "../system/mpc-test-utils.js";
 
 export const RECIPIENT = "0x00000000000000000000000000000000000000b0" as `0x${string}`;
-export const COTI_SIDE_TOKEN = "0x00000000000000000000000000000000000000c0" as `0x${string}`;
 
 export const DEFAULT_WITHDRAW = {
   transferFee: 100n,
@@ -156,43 +156,64 @@ export async function expectWithdrawTransferSubmitted(ctx: PortalTestContext, am
   assert.equal(await ctx.portal.read.withdrawalNonce(), 1n);
 }
 
+export async function deployCotiMother(ctx: PortalTestContext, inboxAddress: `0x${string}`) {
+  return ctx.viem.deployContract("PodErc20CotiMother", [inboxAddress, ctx.owner], {
+    client: { public: ctx.publicClient, wallet: ctx.wallet },
+  });
+}
+
+const CONSTANT_FEE = {
+  constantFee: 1n,
+  gasPerByte: 0n,
+  callbackExecutionGas: 0n,
+  errorLength: 0n,
+  bufferRatioX10000: 0n,
+} as const;
+
+const deployInboxWithFees = async (viem: any, chainId: bigint, client: { public: PublicClient; wallet: WalletClient }) => {
+  const inbox = await deployInboxWithInit(viem, chainId, { client });
+  const oracle = await viem.deployContract("PriceOracle", [client.wallet.account.address], { client });
+  await oracle.write.setLocalTokenPriceUSD([10n ** 18n], { account: client.wallet.account.address });
+  await oracle.write.setRemoteTokenPriceUSD([10n ** 18n], { account: client.wallet.account.address });
+  await inbox.write.setPriceOracle([oracle.address], { account: client.wallet.account.address });
+  await inbox.write.updateMinFeeConfigs([{ ...CONSTANT_FEE }, { ...CONSTANT_FEE }], {
+    account: client.wallet.account.address,
+  });
+  return inbox;
+};
+
 export async function deployPortalFactory(ctx: PortalTestContext) {
+  const client = { public: ctx.publicClient, wallet: ctx.wallet };
+  const inbox = await deployInboxWithFees(ctx.viem, 31337n, client);
+  const mother = await deployCotiMother(ctx, inbox.address);
   const portalImplementation = await ctx.viem.deployContract("PrivacyPortal", [], {
     client: { public: ctx.publicClient, wallet: ctx.wallet },
   });
   const tokenImplementation = await ctx.viem.deployContract("PodErc20MintableInitializable", [], {
     client: { public: ctx.publicClient, wallet: ctx.wallet },
   });
-  return ctx.viem.deployContract(
+  const factory = await ctx.viem.deployContract(
     "PrivacyPortalFactory",
-    [ctx.owner, ctx.owner, 7082400n, tokenImplementation.address, portalImplementation.address],
+    [ctx.owner, inbox.address, 7082400n, mother.address, tokenImplementation.address, portalImplementation.address],
     { client: { public: ctx.publicClient, wallet: ctx.wallet } }
   );
+  return { factory, mother, inbox };
 }
 
 export async function deployFactoryPortalPair(ctx: PortalTestContext) {
-  const factory = await deployPortalFactory(ctx);
+  const { factory } = await deployPortalFactory(ctx);
   const underlying = await ctx.viem.deployContract("MockERC20", ["Second", "SEC"], {
     client: { public: ctx.publicClient, wallet: ctx.wallet },
   });
 
   await factory.write.createPortal(
-    [underlying.address, COTI_SIDE_TOKEN, "Private SEC", "pSEC", 6, ctx.owner],
-    writeOpts(ctx)
+    [underlying.address, "Private SEC", "pSEC", 6, ctx.owner],
+    { ...writeOpts(ctx), value: 2_500_000_000_000n }
   );
 
   const portal = await factory.read.portalForUnderlying([underlying.address]);
   const pToken = await factory.read.pTokenForUnderlying([underlying.address]);
   return { factory, underlying, portal, pToken };
-}
-
-export async function deployCotiSideFactory(ctx: PortalTestContext) {
-  const implementation = await ctx.viem.deployContract("PodErc20CotiSideInitializable", [], {
-    client: { public: ctx.publicClient, wallet: ctx.wallet },
-  });
-  return ctx.viem.deployContract("PodErc20CotiSideFactory", [ctx.owner, ctx.owner, implementation.address], {
-    client: { public: ctx.publicClient, wallet: ctx.wallet },
-  });
 }
 
 export { zeroAddress };
