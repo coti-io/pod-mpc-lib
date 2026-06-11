@@ -5,7 +5,7 @@ import { zeroHash } from "viem";
 import {
   burnAccumulatedDebt,
   completePTokenTransferCallback,
-  deployCotiSideFactory,
+  deployPortalFactory,
   deployDirectPortalContext,
   deployFactoryPortalPair,
   depositPublicToken,
@@ -157,14 +157,15 @@ describe("PrivacyPortal", { concurrency: 1 }, async function () {
     );
   });
 
-  it("COTI-side factory deploys initializer-only ledger clones", async function () {
+  it("COTI mother contract deploys and allowlists source factories", async function () {
     ctx = await freshPortal();
-    const factory = await deployCotiSideFactory(ctx);
+    const { mother, factory, inbox } = await deployPortalFactory(ctx);
 
-    await factory.write.createCotiSideToken([owner], { account: owner });
+    assert.notEqual(mother.address, zeroAddress);
+    assert.equal((await factory.read.cotiMotherContract()).toLowerCase(), mother.address.toLowerCase());
 
-    assert.equal(await factory.read.allCotiSideTokensLength(), 1n);
-    const token = await factory.read.allCotiSideTokens([0n]);
-    assert.notEqual(token, zeroAddress);
+    await mother.write.setAllowedFactory([31337n, factory.address, true], { account: owner });
+    assert.equal(await mother.read.allowedFactories([31337n, factory.address]), true);
+    assert.equal((await mother.read.inbox()).toLowerCase(), inbox.address.toLowerCase());
   });
 });

@@ -1,6 +1,7 @@
 import {
   connectPrivacyPortalNetwork,
   createSourcePortalAndPToken,
+  DEFAULT_COTI_NETWORK,
   envAddress,
   envString,
   optionalEnvAddress,
@@ -8,9 +9,10 @@ import {
 
 const main = async () => {
   const ctx = await connectPrivacyPortalNetwork(process.env.SOURCE_NETWORK);
+  const coti = await connectPrivacyPortalNetwork(process.env.COTI_NETWORK || DEFAULT_COTI_NETWORK);
   const factory = envAddress("SOURCE_FACTORY");
   const underlying = envAddress("UNDERLYING_TOKEN");
-  const cotiSideToken = envAddress("COTI_SIDE_PTOKEN");
+  const cotiMother = envAddress("COTI_MOTHER");
   const name = envString("PTOKEN_NAME");
   const symbol = envString("PTOKEN_SYMBOL");
   const decimals = Number(process.env.PTOKEN_DECIMALS || "18");
@@ -19,11 +21,13 @@ const main = async () => {
   const deployed = await createSourcePortalAndPToken(ctx, {
     factory,
     underlying,
-    cotiSideToken,
     name,
     symbol,
     decimals,
     portalOwner,
+    cotiCtx: coti,
+    cotiMother,
+    cotiChainId: BigInt(coti.chainId),
   });
   console.log("[privacyPortal:deploy-source-portal] deployed", deployed);
 };

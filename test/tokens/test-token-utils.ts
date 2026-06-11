@@ -3,11 +3,14 @@ import { JsonRpcProvider } from "ethers";
 import { privateKeyToAccount } from "viem/accounts";
 import { decryptUint } from "@coti-io/coti-sdk-typescript";
 import { ONBOARD_CONTRACT_ADDRESS, transferNative, Wallet as CotiWallet } from "@coti-io/coti-ethers";
+import { encodeFunctionData, parseAbi } from "viem";
 import {
   buildEncryptedInput256,
   decryptUint256,
   fundContractForInboxFees,
+  getLatestRequest,
   logStep,
+  mineRequest,
   normalizePrivateKey,
   onboardUser,
   receiptWaitOptions,
@@ -42,17 +45,66 @@ export type PodTokenTestContext = {
   pod: any;
   /** Same Hardhat `PodErc20Mintable` instance, wallet = COTI-funded owner (cross-chain test pattern). */
   podAsCoti: any;
-  podCotiSide: any;
+  podCotiMother: any;
   owner: `0x${string}`;
   bob: { address: `0x${string}`; userKey: string; wallet: CotiWallet };
 };
 
 const deriveSecondaryPrivateKey = (primaryKey: string) => {
+  return derivePrivateKeyVariant(primaryKey, 0x01);
+};
+
+/** Derive a deterministic secondary EOA from the primary COTI key (xor last byte). */
+export function derivePrivateKeyVariant(primaryKey: string, xorLastByte: number): `0x${string}` {
   const normalized = normalizePrivateKey(primaryKey).slice(2);
   const bytes = Buffer.from(normalized, "hex");
-  bytes[bytes.length - 1] ^= 0x01;
+  bytes[bytes.length - 1] ^= xorLastByte & 0xff;
   return `0x${bytes.toString("hex")}`;
 };
+
+/** Funds a COTI account from the primary wallet; does not onboard. */
+export async function fundCotiNativeAccount(params: {
+  funderPrivateKey: string;
+  recipient: `0x${string}`;
+  amountWei?: bigint;
+}): Promise<void> {
+  const cotiRpcUrl = requireEnv("COTI_TESTNET_RPC_URL");
+  const amountWei = params.amountWei ?? 1_000_000_000_000_000_000n;
+  const provider = new JsonRpcProvider(cotiRpcUrl) as any;
+  const fundingWallet = new CotiWallet(normalizePrivateKey(params.funderPrivateKey), provider);
+  let funded = false;
+  for (let attempt = 0; attempt < 4 && !funded; attempt++) {
+    if (attempt > 0) {
+      logStep(`fundCotiNativeAccount retry ${attempt}`);
+      await new Promise((r) => setTimeout(r, 5_000));
+    }
+    try {
+      const tx = await transferNative(provider, fundingWallet, params.recipient, amountWei, 100_000);
+      funded = !!tx;
+    } catch (e) {
+      logStep(`fundCotiNativeAccount failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  if (!funded) {
+    throw new Error(`Failed to fund ${params.recipient} on COTI`);
+  }
+}
+
+/** Funded COTI EOA without AES onboarding — for late-onboard transfer/approve tests. */
+export async function setupFundedUnonboardedUser(
+  primaryPrivateKey: string,
+  xorLastByte: number
+): Promise<{ address: `0x${string}`; privateKey: `0x${string}`; wallet: CotiWallet }> {
+  const cotiRpcUrl = requireEnv("COTI_TESTNET_RPC_URL");
+  const privateKey = derivePrivateKeyVariant(primaryPrivateKey, xorLastByte);
+  const provider = new JsonRpcProvider(cotiRpcUrl) as any;
+  const wallet = new CotiWallet(privateKey, provider);
+  await fundCotiNativeAccount({
+    funderPrivateKey: primaryPrivateKey,
+    recipient: wallet.address as `0x${string}`,
+  });
+  return { address: wallet.address as `0x${string}`, privateKey, wallet };
+}
 
 /** Funds and onboards a second account (Bob) for balance decryption on transfers. */
 export async function setupBobUser(primaryPrivateKey: string): Promise<{
@@ -105,7 +157,7 @@ export async function setupBobUser(primaryPrivateKey: string): Promise<{
   return { address: wallet.address as `0x${string}`, userKey, wallet };
 }
 
-/** Inbox + miners + `PodERC20` on Hardhat + `PodErc20CotiSide` on COTI with mutual authorization. */
+/** Inbox + miners + `PodERC20` on Hardhat + `PodErc20CotiMother` on COTI with factory registration. */
 export async function setupPodTokenTestContext(params: {
   sepoliaViem: any;
   cotiViem: any;
@@ -117,9 +169,9 @@ export async function setupPodTokenTestContext(params: {
   const owner = cotiAccount.address;
   const hardhatCotiWallet = await params.sepoliaViem.getWalletClient(owner);
 
-  logStep("Deploying PodErc20CotiSide on COTI");
-  const podCotiSide = await params.cotiViem.deployContract(
-    "PodErc20CotiSide",
+  logStep("Deploying PodErc20CotiMother on COTI");
+  const podCotiMother = await params.cotiViem.deployContract(
+    "PodErc20CotiMother",
     [base.contracts.inboxCoti.address, owner],
     { client: { public: base.coti.publicClient, wallet: base.coti.wallet } } as any
   );
@@ -129,14 +181,22 @@ export async function setupPodTokenTestContext(params: {
     owner,
     base.chainIds.coti,
     base.contracts.inboxSepolia.address,
-    podCotiSide.address,
+    podCotiMother.address,
     "PoD Test Token",
     "PODT",
   ]);
 
   await fundContractForInboxFees(hardhatCotiWallet, base.sepolia.publicClient, pod.address as `0x${string}`);
 
-  await podCotiSide.write.setAuthorizedRemote([BigInt(base.chainIds.sepolia), pod.address]);
+  await registerPodTokenOnMother({
+    base,
+    mother: podCotiMother,
+    pTokenAddress: pod.address,
+    registrar: owner,
+    name: "PoD Test Token",
+    symbol: "PODT",
+    decimals: 18,
+  });
 
   const podAsCoti = await params.sepoliaViem.getContractAt("PodErc20Mintable", pod.address, {
     client: { public: base.sepolia.publicClient, wallet: hardhatCotiWallet },
@@ -145,17 +205,90 @@ export async function setupPodTokenTestContext(params: {
   const bob = await setupBobUser(cotiPk);
 
   logStep("Pod token setup complete");
-  return { base, pod, podAsCoti, podCotiSide, owner, bob };
+  return { base, pod, podAsCoti, podCotiMother, owner, bob };
 }
 
-/** Owner `ownerMint(to, amount)` on `PodErc20CotiSide` (COTI balance ciphertext ledger). Waits for confirmation. */
+/** Native wei for `sendOneWayMessage` registration (matches `PrivacyPortalFactory.createPortal` default). */
+export const POD_TOKEN_ONE_WAY_REGISTRATION_FEE_WEI = 2_500_000_000_000n;
+
+/** Registers a source-chain pToken namespace on the COTI mother via a mined one-way inbox message. */
+export async function registerPodTokenOnMother(params: {
+  base: TestContext;
+  mother: any;
+  pTokenAddress: `0x${string}`;
+  registrar: `0x${string}`;
+  name?: string;
+  symbol?: string;
+  decimals?: number;
+}) {
+  const { base, mother, pTokenAddress, registrar } = params;
+  const name = params.name ?? "PoD Test Token";
+  const symbol = params.symbol ?? "PODT";
+  const decimals = params.decimals ?? 18;
+
+  await params.mother.write.setAllowedFactory(
+    [BigInt(base.chainIds.sepolia), registrar, true],
+    { account: params.base.coti.wallet.account }
+  );
+
+  const data = encodeFunctionData({
+    abi: parseAbi([
+      "function registerToken(address remotePToken, string name, string symbol, uint8 decimals)",
+    ]),
+    functionName: "registerToken",
+    args: [pTokenAddress, name, symbol, decimals],
+  });
+
+  const hash = await base.contracts.inboxSepolia.write.sendOneWayMessage(
+    [
+      base.chainIds.coti,
+      mother.address,
+      {
+        selector: "0x00000000",
+        data,
+        datatypes: [],
+        datalens: [],
+      },
+      "0x00000000",
+    ],
+    {
+      account: registrar,
+      value: POD_TOKEN_ONE_WAY_REGISTRATION_FEE_WEI,
+      // eth_estimateGas simulates without msg.value; inbox rejects TotalFeeTooLow(0) during estimation.
+      gas: 800_000n,
+    }
+  );
+  await base.sepolia.publicClient.waitForTransactionReceipt({ hash, ...receiptWaitOptions });
+
+  const outboundRequest = await getLatestRequest(base.contracts.inboxSepolia, base.chainIds.coti);
+  await mineRequest(
+    base,
+    "coti",
+    BigInt(base.chainIds.sepolia),
+    outboundRequest,
+    "registerPodToken",
+    { gas: getDefaultCotiMineGasPodToken() }
+  );
+
+  const registered = await mother.read.isRegistered([BigInt(base.chainIds.sepolia), pTokenAddress]);
+  assert.ok(registered, "pToken not registered on COTI mother");
+}
+
+/** Mints on COTI via the pToken minter inbox path (`mintPublic` on the mother). No-op for `amount == 0`. */
 export async function mintOnCoti(
   ctx: PodTokenTestContext,
   to: `0x${string}`,
   amount: bigint
 ): Promise<void> {
-  const txHash = await ctx.podCotiSide.write.ownerMint([to, amount]);
-  await ctx.base.coti.publicClient.waitForTransactionReceipt({ hash: txHash, ...receiptWaitOptions });
+  if (amount === 0n) {
+    return;
+  }
+  await completePodOpRoundTrip(ctx, "mintOnCoti", () =>
+    ctx.podAsCoti.write.mint(
+      [to, amount, ctx.base.podTwoWayFees.callbackFeeWei],
+      podTwoWayWriteOptions(ctx.base.podTwoWayFees)
+    )
+  );
 }
 
 /** Runs `syncBalances` from PoD and completes COTI + Hardhat mining (pulls ciphertext to Sepolia). */

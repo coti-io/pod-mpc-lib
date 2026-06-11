@@ -2,14 +2,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { zeroAddress } from "viem";
 import {
-  configureCotiSideRemote,
+  allowlistFactoryOnMother,
   connectPrivacyPortalNetwork,
-  createCotiSidePToken,
   createSourcePortalAndPToken,
   DEFAULT_COTI_NETWORK,
   DEFAULT_SOURCE_NETWORK,
-  deployCotiFactory,
+  deployCotiMother,
   deploySourceFactory,
+  getCotiMotherFromConfig,
   getInboxFromConfig,
   optionalEnvAddress,
   type ConnectedNetwork,
@@ -25,11 +25,11 @@ type SourcePrivacyPortalConfig = {
   inbox?: string;
   cotiNetwork?: string;
   cotiChainId?: number;
+  cotiMother?: string;
 };
 
 type CotiPrivacyPortalConfig = {
-  factory?: string;
-  cotiSideImplementation?: string;
+  cotiMother?: string;
   inbox?: string;
 };
 
@@ -40,7 +40,6 @@ type TokenConfig = {
   decimals?: number;
   privacyPortal?: string;
   pToken?: string;
-  cotiSide?: string;
 };
 
 type NetworkConfig = {
@@ -95,10 +94,35 @@ const configuredInboxOrDeployConfig = async (
   return configured ?? getInboxFromConfig(ctx, label);
 };
 
+const ensureCotiMother = async (ctx: ConnectedNetwork, cotiConfig: NetworkConfig): Promise<AddressString> => {
+  const existing = normalizeOptionalAddress(
+    (cotiConfig.privacyPortal as CotiPrivacyPortalConfig).cotiMother,
+    "coti.privacyPortal.cotiMother"
+  );
+  if (existing) {
+    console.log(`[privacyPortal:sync] COTI mother already configured: ${existing}`);
+    return existing;
+  }
+
+  try {
+    const fromDeployConfig = await getCotiMotherFromConfig(ctx);
+    (cotiConfig.privacyPortal as CotiPrivacyPortalConfig).cotiMother = fromDeployConfig;
+    return fromDeployConfig;
+  } catch {
+    const inbox = await configuredInboxOrDeployConfig(ctx, cotiConfig, "coti");
+    const owner = optionalEnvAddress("FACTORY_OWNER");
+    const deployed = await deployCotiMother(ctx, { inbox, owner });
+    (cotiConfig.privacyPortal as CotiPrivacyPortalConfig).cotiMother = deployed.mother;
+    cotiConfig.privacyPortal.inbox = inbox;
+    return deployed.mother;
+  }
+};
+
 const ensureSourceFactory = async (
   ctx: ConnectedNetwork,
   sourceConfig: NetworkConfig,
-  cotiChainId: bigint
+  cotiChainId: bigint,
+  cotiMother: AddressString
 ): Promise<AddressString> => {
   const existing = normalizeOptionalAddress(sourceConfig.privacyPortal.factory, "source.privacyPortal.factory");
   if (existing) {
@@ -108,27 +132,12 @@ const ensureSourceFactory = async (
 
   const inbox = await configuredInboxOrDeployConfig(ctx, sourceConfig, "source");
   const owner = optionalEnvAddress("FACTORY_OWNER");
-  const deployed = await deploySourceFactory(ctx, { inbox, cotiChainId, owner });
+  const deployed = await deploySourceFactory(ctx, { inbox, cotiChainId, cotiMother, owner });
   sourceConfig.privacyPortal.factory = deployed.factory;
   (sourceConfig.privacyPortal as SourcePrivacyPortalConfig).portalImplementation = deployed.portalImplementation;
   (sourceConfig.privacyPortal as SourcePrivacyPortalConfig).podTokenImplementation = deployed.podTokenImplementation;
+  (sourceConfig.privacyPortal as SourcePrivacyPortalConfig).cotiMother = cotiMother;
   sourceConfig.privacyPortal.inbox = inbox;
-  return deployed.factory;
-};
-
-const ensureCotiFactory = async (ctx: ConnectedNetwork, cotiConfig: NetworkConfig): Promise<AddressString> => {
-  const existing = normalizeOptionalAddress(cotiConfig.privacyPortal.factory, "coti.privacyPortal.factory");
-  if (existing) {
-    console.log(`[privacyPortal:sync] COTI factory already configured: ${existing}`);
-    return existing;
-  }
-
-  const inbox = await configuredInboxOrDeployConfig(ctx, cotiConfig, "coti");
-  const owner = optionalEnvAddress("FACTORY_OWNER");
-  const deployed = await deployCotiFactory(ctx, { inbox, owner });
-  cotiConfig.privacyPortal.factory = deployed.factory;
-  (cotiConfig.privacyPortal as CotiPrivacyPortalConfig).cotiSideImplementation = deployed.cotiSideImplementation;
-  cotiConfig.privacyPortal.inbox = inbox;
   return deployed.factory;
 };
 
@@ -161,30 +170,14 @@ const syncTokenWithSourceFactory = async (
   }
 };
 
-const ensureCotiSideToken = async (
-  ctx: ConnectedNetwork,
-  token: TokenConfig,
-  cotiFactoryAddress: AddressString
-): Promise<AddressString> => {
-  const existing = normalizeOptionalAddress(token.cotiSide, `tokens.${token.symbol}.cotiSide`);
-  if (existing) {
-    console.log(`[privacyPortal:sync] ${token.symbol}: COTI-side pToken already configured: ${existing}`);
-    return existing;
-  }
-
-  const owner = optionalEnvAddress("PTOKEN_OWNER");
-  const cotiSide = await createCotiSidePToken(ctx, { factory: cotiFactoryAddress, owner });
-  token.cotiSide = cotiSide;
-  return cotiSide;
-};
-
 const ensureSourcePortalPair = async (
-  ctx: ConnectedNetwork,
+  sourceCtx: ConnectedNetwork,
+  cotiCtx: ConnectedNetwork,
   token: TokenConfig,
   sourceFactoryAddress: AddressString,
-  cotiSideToken: AddressString
+  cotiMother: AddressString
 ) => {
-  await syncTokenWithSourceFactory(ctx, token, sourceFactoryAddress);
+  await syncTokenWithSourceFactory(sourceCtx, token, sourceFactoryAddress);
   if (isAddressSet(token.privacyPortal) && isAddressSet(token.pToken)) {
     console.log(
       `[privacyPortal:sync] ${token.symbol}: source portal=${token.privacyPortal} pToken=${token.pToken}`
@@ -193,39 +186,36 @@ const ensureSourcePortalPair = async (
   }
 
   const portalOwner = optionalEnvAddress("PORTAL_OWNER");
-  const deployed = await createSourcePortalAndPToken(ctx, {
+  const deployed = await createSourcePortalAndPToken(sourceCtx, {
     factory: sourceFactoryAddress,
     underlying: requireTokenAddress(token.erc20, `tokens.${token.symbol}.erc20`),
-    cotiSideToken,
     name: token.name,
     symbol: token.symbol,
     decimals: token.decimals ?? 18,
     portalOwner,
+    cotiCtx,
+    cotiMother,
+    cotiChainId: BigInt(cotiCtx.chainId),
   });
   token.privacyPortal = deployed.portal;
   token.pToken = deployed.pToken;
 };
 
-const ensureCotiRemote = async (ctx: ConnectedNetwork, token: TokenConfig, sourceChainId: bigint) => {
-  const cotiSide = requireTokenAddress(token.cotiSide ?? "", `tokens.${token.symbol}.cotiSide`);
+const ensureMotherRegistration = async (
+  cotiCtx: ConnectedNetwork,
+  token: TokenConfig,
+  sourceChainId: bigint,
+  cotiMother: AddressString
+) => {
   const pToken = requireTokenAddress(token.pToken ?? "", `tokens.${token.symbol}.pToken`);
-  const cotiSideContract = await ctx.viem.getContractAt("PodErc20CotiSide", cotiSide, {
-    client: { public: ctx.publicClient, wallet: ctx.walletClient },
+  const mother = await cotiCtx.viem.getContractAt("PodErc20CotiMother", cotiMother, {
+    client: { public: cotiCtx.publicClient, wallet: cotiCtx.walletClient },
   });
-
-  const remoteChainId = await cotiSideContract.read.authorizedRemoteChainId();
-  const remoteContract = await cotiSideContract.read.authorizedRemoteContract();
-  if (remoteChainId === 0n || remoteContract.toLowerCase() === zeroAddress) {
-    await configureCotiSideRemote(ctx, { cotiSideToken: cotiSide, sourceChainId, sourcePToken: pToken });
-    return;
+  const registered = await mother.read.isRegistered([sourceChainId, pToken]);
+  if (!registered) {
+    throw new Error(`${token.symbol}: pToken not registered on COTI mother (${sourceChainId}, ${pToken})`);
   }
-  if (remoteChainId !== sourceChainId || remoteContract.toLowerCase() !== pToken.toLowerCase()) {
-    throw new Error(
-      `${token.symbol}: COTI remote mismatch. ` +
-        `on-chain=(${remoteChainId}, ${remoteContract}) config=(${sourceChainId}, ${pToken})`
-    );
-  }
-  console.log(`[privacyPortal:sync] ${token.symbol}: COTI remote already configured`);
+  console.log(`[privacyPortal:sync] ${token.symbol}: registered on COTI mother`);
 };
 
 const main = async () => {
@@ -247,15 +237,20 @@ const main = async () => {
 
   const configuredCotiChainId = (sourceConfig.privacyPortal as SourcePrivacyPortalConfig).cotiChainId;
   const cotiChainId = BigInt(configuredCotiChainId ?? coti.chainId);
-  const cotiFactory = await ensureCotiFactory(coti, cotiConfig);
-  const sourceFactory = await ensureSourceFactory(source, sourceConfig, cotiChainId);
+  const cotiMother = await ensureCotiMother(coti, cotiConfig);
+  const sourceFactory = await ensureSourceFactory(source, sourceConfig, cotiChainId, cotiMother);
+
+  await allowlistFactoryOnMother(coti, {
+    mother: cotiMother,
+    sourceChainId: BigInt(source.chainId),
+    factory: sourceFactory,
+  });
 
   const tokens = sourceConfig.tokens ?? [];
   for (const token of tokens) {
     console.log(`[privacyPortal:sync] syncing token ${token.symbol} (${token.erc20})`);
-    const cotiSide = await ensureCotiSideToken(coti, token, cotiFactory);
-    await ensureSourcePortalPair(source, token, sourceFactory, cotiSide);
-    await ensureCotiRemote(coti, token, BigInt(source.chainId));
+    await ensureSourcePortalPair(source, coti, token, sourceFactory, cotiMother);
+    await ensureMotherRegistration(coti, token, BigInt(source.chainId), cotiMother);
   }
 
   await writeConfig(config);

@@ -1,15 +1,15 @@
 import {
-  configureCotiSideRemote,
+  allowlistFactoryOnMother,
   connectPrivacyPortalNetwork,
-  createCotiSidePToken,
   createSourcePortalAndPToken,
   DEFAULT_COTI_NETWORK,
   DEFAULT_SOURCE_NETWORK,
-  deployCotiFactory,
+  deployCotiMother,
   deploySourceFactory,
   envAddress,
   envBigInt,
   envString,
+  getCotiMotherFromConfig,
   getInboxFromConfig,
   optionalEnvAddress,
 } from "./deploy-utils.js";
@@ -23,50 +23,51 @@ const main = async () => {
   const decimals = Number(process.env.PTOKEN_DECIMALS || "18");
   const owner = optionalEnvAddress("FACTORY_OWNER");
   const portalOwner = optionalEnvAddress("PORTAL_OWNER");
-  const pTokenOwner = optionalEnvAddress("PTOKEN_OWNER");
 
   const source = await connectPrivacyPortalNetwork(sourceNetwork);
   const coti = await connectPrivacyPortalNetwork(cotiNetwork);
 
-  let cotiFactory = optionalEnvAddress("COTI_FACTORY");
-  if (!cotiFactory) {
-    const cotiInbox = await getInboxFromConfig(coti, "coti");
-    cotiFactory = (await deployCotiFactory(coti, { inbox: cotiInbox, owner })).factory;
+  let cotiMother = optionalEnvAddress("COTI_MOTHER");
+  if (!cotiMother) {
+    try {
+      cotiMother = await getCotiMotherFromConfig(coti);
+    } catch {
+      const cotiInbox = await getInboxFromConfig(coti, "coti");
+      cotiMother = (await deployCotiMother(coti, { inbox: cotiInbox, owner })).mother;
+    }
   }
 
   let sourceFactory = optionalEnvAddress("SOURCE_FACTORY");
   if (!sourceFactory) {
     const sourceInbox = await getInboxFromConfig(source, "source");
     const cotiChainId = envBigInt("COTI_CHAIN_ID", BigInt(coti.chainId));
-    sourceFactory = (await deploySourceFactory(source, { inbox: sourceInbox, cotiChainId, owner })).factory;
+    sourceFactory = (
+      await deploySourceFactory(source, { inbox: sourceInbox, cotiChainId, cotiMother, owner })
+    ).factory;
   }
 
-  const cotiSideToken = await createCotiSidePToken(coti, {
-    factory: cotiFactory,
-    owner: pTokenOwner,
+  await allowlistFactoryOnMother(coti, {
+    mother: cotiMother,
+    sourceChainId: BigInt(source.chainId),
+    factory: sourceFactory,
   });
 
   const sourcePair = await createSourcePortalAndPToken(source, {
     factory: sourceFactory,
     underlying,
-    cotiSideToken,
     name,
     symbol,
     decimals,
     portalOwner,
-  });
-
-  await configureCotiSideRemote(coti, {
-    cotiSideToken,
-    sourceChainId: BigInt(source.chainId),
-    sourcePToken: sourcePair.pToken,
+    cotiCtx: coti,
+    cotiMother,
+    cotiChainId: BigInt(coti.chainId),
   });
 
   console.log("[privacyPortal:deploy-token] deployed", {
     underlying,
     sourceFactory,
-    cotiFactory,
-    cotiSideToken,
+    cotiMother,
     portal: sourcePair.portal,
     pToken: sourcePair.pToken,
   });

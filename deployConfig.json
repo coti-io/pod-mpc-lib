@@ -64,35 +64,14 @@
     "2632500": {
       "inbox": "",
       "cotiExecutor": "",
-      "cotiSideImplementation": "",
-      "cotiSideFactory": ""
+      "cotiMother": ""
     },
     "7082400": {
       "inbox": "0xB4A53FE02401fDFA8DAc00450dA3FfF8D01502F8",
       "cotiExecutor": "0x1084e11abd753b7a9d54e5fe5f8f2379d8c4a857",
       "priceOracle": "0x59438667ad41b6f97bf1a086c65989b14436a975",
       "pErc20Coti": "",
-      "cotiSideImplementation": "0xd0a30d8eb51204b15c10b843d1c9a4ef6cd0dc09",
-      "cotiSideFactory": "0x4cf3e44d8495b310566db3d9952d85bfa4aea53e",
-      "privacyPortalTokens": {
-        "pMTT": {
-          "bySource": {
-            "43113": {
-              "cotiSide": "0x3aB7B2e8ABe950F9551A98293eaE4c26B8fBdaf2"
-            },
-            "11155111": {
-              "cotiSide": "0x225A11C096005c416DDEcCB3ef93C9174E250828"
-            }
-          }
-        },
-        "ptUSDC": {
-          "bySource": {
-            "43113": {
-              "cotiSide": "0x0543f585d24057F246B264413dc92a1e7abD0248"
-            }
-          }
-        }
-      },
+      "cotiMother": "",
       "feeConfig": {
         "local": {
           "constantFee": "12000000",
