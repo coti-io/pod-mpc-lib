@@ -215,10 +215,9 @@ const isAddr = (v: unknown): v is Address =>
  * per-source-chain underlying ERC20 and deployed clone addresses are recorded in deployConfig
  * (data-driven). Add a token by appending to `PP_TOKENS`.
  *
- * A COTI-side pToken authorizes exactly one remote peer, so EACH source chain gets its own
- * COTI-side token. deployConfig layout:
- *   chains[<source>].privacyPortalTokens[key]                    = { underlying, portal, pToken }
- *   chains[<coti>].privacyPortalTokens[key].bySource[<source>]   = { cotiSide }
+ * All source pTokens share one COTI-side mother ledger. deployConfig layout:
+ *   chains[<coti>].cotiMother
+ *   chains[<source>].privacyPortalTokens[key] = { underlying, portal, pToken }
  */
 type PpToken = {
   /** deployConfig key under `privacyPortalTokens` and the private pToken identity. */
@@ -272,13 +271,9 @@ const cotiChainForSource = (sourceChainId: number): number =>
 const readSourceToken = (sourceChainId: number, key: string): Record<string, any> =>
   readCfgSync().chains?.[String(sourceChainId)]?.privacyPortalTokens?.[key] ?? {};
 
-/** COTI-side token entry `{ cotiSide? }` for a given source pairing from deployConfig. */
-const readCotiToken = (
-  cotiChainId: number | bigint,
-  key: string,
-  sourceChainId: number
-): Record<string, any> =>
-  readCfgSync().chains?.[String(cotiChainId)]?.privacyPortalTokens?.[key]?.bySource?.[String(sourceChainId)] ?? {};
+/** COTI mother contract address from deployConfig. */
+const readCotiMother = (cotiChainId: number | bigint): string | undefined =>
+  readCfgSync().chains?.[String(cotiChainId)]?.cotiMother;
 
 /** Persist a field on the source-side token entry under `chains[source].privacyPortalTokens[key]`. */
 const recordSourceTokenField = async (
@@ -295,28 +290,8 @@ const recordSourceTokenField = async (
   await writeCfg(cfg);
 };
 
-/** Persist the COTI-side clone address for a source pairing under `...[key].bySource[source]`. */
-const recordCotiTokenField = async (
-  cotiChainId: number,
-  key: string,
-  sourceChainId: number,
-  field: string,
-  value: string
-): Promise<void> => {
-  const cfg = await readCfg();
-  const entry = chainEntry(cfg, cotiChainId);
-  entry.privacyPortalTokens ??= {};
-  entry.privacyPortalTokens[key] ??= {};
-  entry.privacyPortalTokens[key].bySource ??= {};
-  entry.privacyPortalTokens[key].bySource[String(sourceChainId)] ??= {};
-  entry.privacyPortalTokens[key].bySource[String(sourceChainId)][field] = value;
-  await writeCfg(cfg);
-};
-
 /**
  * Build PrivacyPortal wiring targets for every token in `PP_TOKENS`:
- *   - COTI side (per token, per source): a (token + remote) pair, since one COTI-side pToken
- *     authorizes exactly one source peer.
  *   - Source side (per token): an underlying (mock collateral) target and a portal target, each
  *     operating on whichever of the token's source chains is currently connected.
  */
@@ -324,99 +299,6 @@ const buildPpTokenTargets = (): Target[] => {
   const targets: Target[] = [];
 
   for (const t of PP_TOKENS) {
-    for (const srcId of t.sources) {
-      const cotiChainId = cotiChainForSource(srcId);
-      const label = srcLabel(srcId);
-
-      targets.push({
-        id: `ppCotiToken:${t.key}:${srcId}`,
-        label: `${t.pSymbol} tk-${label}`,
-        kind: "action",
-        roles: ["coti"],
-        dependsOn: ["ppCotiFactory"],
-        status: async (ctx) => {
-          if (ctx.chainId !== cotiChainId) return { applied: false, detail: `COTI chain ${cotiChainId} only` };
-          const existing = readCotiToken(ctx.chainId, t.key, srcId).cotiSide;
-          return isAddr(existing)
-            ? { applied: true, detail: existing }
-            : { applied: false, detail: "not created" };
-        },
-        run: async (ctx) => {
-          if (ctx.chainId !== cotiChainId) throw new Error(`Run on COTI chain ${cotiChainId} (got ${ctx.chainId}).`);
-          const existing = readCotiToken(ctx.chainId, t.key, srcId).cotiSide;
-          if (isAddr(existing)) {
-            console.log(`  ${t.key} COTI-side (${label}) already created: ${existing}`);
-            return;
-          }
-          const factoryAddr = asAddress(chainCfgSync(ctx.chainId).cotiSideFactory, "cotiSideFactory");
-          const factory = await ctx.viem.getContractAt("PodErc20CotiSideFactory", factoryAddr, {
-            client: { public: ctx.publicClient, wallet: ctx.walletClient },
-          });
-          const nextIndex = await factory.read.allCotiSideTokensLength();
-          const hash = await factory.write.createCotiSideToken([factoryOwner(ctx)], { account: ctx.deployer });
-          await waitMined(ctx.publicClient, hash);
-          const cotiSide = (await factory.read.allCotiSideTokens([nextIndex])) as Address;
-          await recordCotiTokenField(ctx.chainId, t.key, srcId, "cotiSide", cotiSide);
-          console.log(`  ${t.key} COTI-side pToken (${label}): ${cotiSide}`);
-          console.log(`  Recorded deployConfig.chains.${ctx.chainId}.privacyPortalTokens.${t.key}.bySource.${srcId}.cotiSide`);
-        },
-      });
-
-      targets.push({
-        id: `ppCotiRemote:${t.key}:${srcId}`,
-        label: `${t.pSymbol} rm-${label}`,
-        kind: "action",
-        roles: ["coti"],
-        dependsOn: ["ppCotiFactory"],
-        status: async (ctx) => {
-          if (ctx.chainId !== cotiChainId) return { applied: false, detail: `COTI chain ${cotiChainId} only` };
-          const cotiSide = readCotiToken(ctx.chainId, t.key, srcId).cotiSide;
-          if (!isAddr(cotiSide)) return { applied: false, detail: `needs ${t.pSymbol} tk-${label}` };
-          const sourcePToken = readSourceToken(srcId, t.key).pToken;
-          if (!isAddr(sourcePToken)) return { applied: false, detail: `needs ${label} pToken (run portal)` };
-          const token = await ctx.viem.getContractAt("PodErc20CotiSide", cotiSide, {
-            client: { public: ctx.publicClient, wallet: ctx.walletClient },
-          });
-          const [curChain, curRemote] = await Promise.all([
-            token.read.authorizedRemoteChainId(),
-            token.read.authorizedRemoteContract(),
-          ]);
-          if (BigInt(curChain) === BigInt(srcId) && (curRemote as string).toLowerCase() === sourcePToken.toLowerCase()) {
-            return { applied: true, detail: `-> ${srcId}:${sourcePToken}` };
-          }
-          if (BigInt(curChain) !== 0n) return { applied: false, detail: `differs -> ${curRemote}` };
-          return { applied: false, detail: `ready -> ${sourcePToken}` };
-        },
-        run: async (ctx) => {
-          if (ctx.chainId !== cotiChainId) throw new Error(`Run on COTI chain ${cotiChainId} (got ${ctx.chainId}).`);
-          const cotiSide = asAddress(
-            readCotiToken(ctx.chainId, t.key, srcId).cotiSide,
-            `chains.${ctx.chainId}.privacyPortalTokens.${t.key}.bySource.${srcId}.cotiSide`
-          );
-          const sourcePToken = asAddress(
-            readSourceToken(srcId, t.key).pToken,
-            `chains.${srcId}.privacyPortalTokens.${t.key}.pToken`
-          );
-          const token = await ctx.viem.getContractAt("PodErc20CotiSide", cotiSide, {
-            client: { public: ctx.publicClient, wallet: ctx.walletClient },
-          });
-          const [curChain, curRemote] = await Promise.all([
-            token.read.authorizedRemoteChainId(),
-            token.read.authorizedRemoteContract(),
-          ]);
-          if (BigInt(curChain) === BigInt(srcId) && (curRemote as string).toLowerCase() === sourcePToken.toLowerCase()) {
-            console.log(`  ${t.key} COTI remote (${label}) already configured -> chain ${srcId} pToken ${sourcePToken}`);
-            return;
-          }
-          const hash = await token.write.setAuthorizedRemote([BigInt(srcId), sourcePToken], {
-            account: ctx.deployer,
-          });
-          await waitMined(ctx.publicClient, hash);
-          console.log(`  ${t.key} COTI remote (${label}) -> chain ${srcId} pToken ${sourcePToken}`);
-        },
-      });
-    }
-
     targets.push({
       id: `ppUnderlying:${t.key}`,
       label: `${t.underlyingSymbol} ERC20`,
@@ -466,13 +348,19 @@ const buildPpTokenTargets = (): Target[] => {
       status: async (ctx) => {
         if (!t.sources.includes(ctx.chainId)) return { applied: false, detail: "n/a on this chain" };
         const entry = readSourceToken(ctx.chainId, t.key);
-        if (isAddr(entry.portal) && isAddr(entry.pToken)) {
-          return { applied: true, detail: `portal ${entry.portal}` };
-        }
+        const cotiMother = readCotiMother(pairedCotiChainId(ctx));
+        if (!isAddr(cotiMother)) return { applied: false, detail: "needs COTI mother" };
         if (!isAddr(entry.underlying)) return { applied: false, detail: `set ${t.underlyingSymbol} underlying first` };
-        const cotiSide = readCotiToken(pairedCotiChainId(ctx), t.key, ctx.chainId).cotiSide;
-        if (!isAddr(cotiSide)) return { applied: false, detail: `needs ${t.pSymbol} tk-${srcLabel(ctx.chainId)} on COTI` };
-        return { applied: false, detail: "ready to create" };
+        if (!isAddr(entry.portal) || !isAddr(entry.pToken)) {
+          return { applied: false, detail: "ready to create" };
+        }
+        const mother = await ctx.viem.getContractAt("PodErc20CotiMother", cotiMother as Address, {
+          client: { public: ctx.publicClient, wallet: ctx.walletClient },
+        });
+        const registered = await mother.read.isRegistered([BigInt(ctx.chainId), entry.pToken]);
+        return registered
+          ? { applied: true, detail: `portal ${entry.portal}` }
+          : { applied: false, detail: "awaiting mother registration" };
       },
       run: async (ctx) => {
         if (!t.sources.includes(ctx.chainId)) {
@@ -483,10 +371,6 @@ const buildPpTokenTargets = (): Target[] => {
           entry.underlying,
           `chains.${ctx.chainId}.privacyPortalTokens.${t.key}.underlying`
         );
-        const cotiSide = asAddress(
-          readCotiToken(pairedCotiChainId(ctx), t.key, ctx.chainId).cotiSide,
-          `chains.${pairedCotiChainId(ctx)}.privacyPortalTokens.${t.key}.bySource.${ctx.chainId}.cotiSide`
-        );
         const factoryAddr = asAddress(chainCfgSync(ctx.chainId).privacyPortalFactory, "privacyPortalFactory");
         const factory = await ctx.viem.getContractAt("PrivacyPortalFactory", factoryAddr, {
           client: { public: ctx.publicClient, wallet: ctx.walletClient },
@@ -496,12 +380,13 @@ const buildPpTokenTargets = (): Target[] => {
         let pToken = (await factory.read.pTokenForUnderlying([underlying])) as Address;
         if (!isAddr(portal)) {
           const hash = await factory.write.createPortal(
-            [underlying, cotiSide, t.pName, t.pSymbol, t.decimals, factoryOwner(ctx)],
-            { account: ctx.deployer }
+            [underlying, t.pName, t.pSymbol, t.decimals, factoryOwner(ctx)],
+            { account: ctx.deployer, value: 1_000_000_000_000_000n }
           );
           await waitMined(ctx.publicClient, hash);
           portal = (await factory.read.portalForUnderlying([underlying])) as Address;
           pToken = (await factory.read.pTokenForUnderlying([underlying])) as Address;
+          console.log(`  ${t.key} registration requested on COTI mother for pToken=${pToken}`);
         } else {
           console.log(`  ${t.key} portal already exists at factory: ${portal}`);
         }
@@ -689,33 +574,65 @@ const TARGETS: Target[] = [
     verifyArgs: (ctx) => [ctx.inboxAddress],
   },
 
-  // --- PrivacyPortal: COTI side (clone implementation + factory) ---
+  // --- PrivacyPortal: COTI side (unified mother ledger) ---
   {
-    id: "ppCotiTokenImpl",
-    label: "PpCotiImpl",
+    id: "ppCotiMother",
+    label: "PpCotiMother",
     kind: "contract",
-    contractName: "PodErc20CotiSideInitializable",
+    contractName: "PodErc20CotiMother",
     roles: ["coti"],
-    dependsOn: [],
-    configKey: "cotiSideImplementation",
-    resolveAddress: (_ctx, chainCfg) => chainCfg.cotiSideImplementation || undefined,
-    deploy: (ctx) => deploySimple(ctx, "PodErc20CotiSideInitializable", []),
-    verifyArgs: () => [],
+    dependsOn: ["inbox"],
+    configKey: "cotiMother",
+    resolveAddress: (_ctx, chainCfg) => chainCfg.cotiMother || undefined,
+    deploy: (ctx) => deploySimple(ctx, "PodErc20CotiMother", [ctx.inboxAddress, factoryOwner(ctx)]),
+    verifyArgs: (ctx) => [ctx.inboxAddress, factoryOwner(ctx)],
   },
   {
-    id: "ppCotiFactory",
-    label: "PpCotiFactory",
-    kind: "contract",
-    contractName: "PodErc20CotiSideFactory",
+    id: "ppCotiMotherAllowlist",
+    label: "PpMotherAllow",
+    kind: "action",
     roles: ["coti"],
-    dependsOn: ["inbox", "ppCotiTokenImpl"],
-    configKey: "cotiSideFactory",
-    resolveAddress: (_ctx, chainCfg) => chainCfg.cotiSideFactory || undefined,
-    deploy: async (ctx) => {
-      const impl = asAddress(chainCfgSync(ctx.chainId).cotiSideImplementation, "cotiSideImplementation");
-      return deploySimple(ctx, "PodErc20CotiSideFactory", [factoryOwner(ctx), ctx.inboxAddress, impl]);
+    dependsOn: ["ppCotiMother"],
+    status: async (ctx) => {
+      const motherAddr = chainCfgSync(ctx.chainId).cotiMother;
+      if (!isAddr(motherAddr)) return { applied: false, detail: "needs COTI mother" };
+      const mother = await ctx.viem.getContractAt("PodErc20CotiMother", motherAddr as Address, {
+        client: { public: ctx.publicClient, wallet: ctx.walletClient },
+      });
+      const missing: string[] = [];
+      for (const net of DEPLOY_NETWORKS.filter((n) => n.role === "source")) {
+        const factory = chainCfgSync(net.chainId).privacyPortalFactory;
+        if (!isAddr(factory)) continue;
+        const allowed = await mother.read.allowedFactories([BigInt(net.chainId), factory]);
+        if (!allowed) missing.push(`${net.label}`);
+      }
+      return missing.length === 0
+        ? { applied: true, detail: "all factories allowlisted" }
+        : { applied: false, detail: `missing: ${missing.join(", ")}` };
     },
-    verifyArgs: (ctx) => [factoryOwner(ctx), ctx.inboxAddress, chainCfgSync(ctx.chainId).cotiSideImplementation],
+    run: async (ctx) => {
+      const motherAddr = asAddress(chainCfgSync(ctx.chainId).cotiMother, "cotiMother");
+      const mother = await ctx.viem.getContractAt("PodErc20CotiMother", motherAddr, {
+        client: { public: ctx.publicClient, wallet: ctx.walletClient },
+      });
+      for (const net of DEPLOY_NETWORKS.filter((n) => n.role === "source")) {
+        const factory = chainCfgSync(net.chainId).privacyPortalFactory;
+        if (!isAddr(factory)) {
+          console.log(`  skip ${net.label}: no privacyPortalFactory in deployConfig`);
+          continue;
+        }
+        const allowed = await mother.read.allowedFactories([BigInt(net.chainId), factory]);
+        if (allowed) {
+          console.log(`  ${net.label} factory already allowlisted: ${factory}`);
+          continue;
+        }
+        const hash = await mother.write.setAllowedFactory([BigInt(net.chainId), factory, true], {
+          account: ctx.deployer,
+        });
+        await waitMined(ctx.publicClient, hash);
+        console.log(`  allowlisted ${net.label} factory=${factory}`);
+      }
+    },
   },
 
   // --- PrivacyPortal: source side (clone implementations + factory) ---
@@ -756,10 +673,15 @@ const TARGETS: Target[] = [
       const chainCfg = chainCfgSync(ctx.chainId);
       const portalImpl = asAddress(chainCfg.portalImplementation, "portalImplementation");
       const podTokenImpl = asAddress(chainCfg.podTokenImplementation, "podTokenImplementation");
+      const cotiMother = asAddress(
+        readCotiMother(pairedCotiChainId(ctx)),
+        `chains.${pairedCotiChainId(ctx)}.cotiMother`
+      );
       return deploySimple(ctx, "PrivacyPortalFactory", [
         factoryOwner(ctx),
         ctx.inboxAddress,
         pairedCotiChainId(ctx),
+        cotiMother,
         podTokenImpl,
         portalImpl,
       ]);
@@ -770,6 +692,7 @@ const TARGETS: Target[] = [
         factoryOwner(ctx),
         ctx.inboxAddress,
         String(pairedCotiChainId(ctx)),
+        readCotiMother(pairedCotiChainId(ctx)) ?? "",
         chainCfg.podTokenImplementation,
         chainCfg.portalImplementation,
       ];

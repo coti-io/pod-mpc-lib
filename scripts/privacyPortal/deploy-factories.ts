@@ -1,10 +1,12 @@
 import {
+  allowlistFactoryOnMother,
   connectPrivacyPortalNetwork,
   DEFAULT_COTI_NETWORK,
   DEFAULT_SOURCE_NETWORK,
-  deployCotiFactory,
+  deployCotiMother,
   deploySourceFactory,
   envBigInt,
+  getCotiMotherFromConfig,
   getInboxFromConfig,
   optionalEnvAddress,
 } from "./deploy-utils.js";
@@ -20,12 +22,31 @@ const main = async () => {
   const cotiInbox = await getInboxFromConfig(coti, "coti");
   const cotiChainId = envBigInt("COTI_CHAIN_ID", BigInt(coti.chainId));
 
-  const cotiFactory = await deployCotiFactory(coti, { inbox: cotiInbox, owner });
-  const sourceFactory = await deploySourceFactory(source, { inbox: sourceInbox, cotiChainId, owner });
+  let cotiMother = optionalEnvAddress("COTI_MOTHER");
+  if (!cotiMother) {
+    try {
+      cotiMother = await getCotiMotherFromConfig(coti);
+    } catch {
+      cotiMother = (await deployCotiMother(coti, { inbox: cotiInbox, owner })).mother;
+    }
+  }
+
+  const sourceFactory = await deploySourceFactory(source, {
+    inbox: sourceInbox,
+    cotiChainId,
+    cotiMother,
+    owner,
+  });
+
+  await allowlistFactoryOnMother(coti, {
+    mother: cotiMother,
+    sourceChainId: BigInt(source.chainId),
+    factory: sourceFactory.factory,
+  });
 
   console.log("[privacyPortal:deploy-factories] deployed", {
     sourceFactory,
-    cotiFactory,
+    cotiMother,
   });
 };
 

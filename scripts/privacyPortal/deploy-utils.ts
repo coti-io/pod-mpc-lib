@@ -25,9 +25,8 @@ export type SourceFactoryDeployment = {
   factory: `0x${string}`;
 };
 
-export type CotiFactoryDeployment = {
-  cotiSideImplementation: `0x${string}`;
-  factory: `0x${string}`;
+export type CotiMotherDeployment = {
+  mother: `0x${string}`;
 };
 
 export type SourcePortalDeployment = {
@@ -85,9 +84,56 @@ export const getInboxFromConfig = async (ctx: ConnectedNetwork, label: string): 
   return asAddress(chainConfig.inbox ?? "", `deployConfig.chains.${ctx.chainId}.inbox`);
 };
 
+export const getCotiMotherFromConfig = async (ctx: ConnectedNetwork): Promise<`0x${string}`> => {
+  const configured = optionalEnvAddress("COTI_MOTHER");
+  if (configured) return configured;
+
+  const deployConfig = await readDeployConfig();
+  const chainConfig = getChainConfig(deployConfig, ctx.chainId, "coti");
+  return asAddress(chainConfig.cotiMother ?? "", `deployConfig.chains.${ctx.chainId}.cotiMother`);
+};
+
+export const deployCotiMother = async (
+  ctx: ConnectedNetwork,
+  params: { inbox: `0x${string}`; owner?: `0x${string}` }
+): Promise<CotiMotherDeployment> => {
+  const owner = params.owner ?? ctx.deployer;
+  console.log("[privacyPortal] deploying PodErc20CotiMother...");
+  const mother = await ctx.viem.deployContract("PodErc20CotiMother", [params.inbox, owner], {
+    client: { public: ctx.publicClient, wallet: ctx.walletClient },
+  });
+  console.log(`[privacyPortal] PodErc20CotiMother=${mother.address}`);
+  await logDeployment(ctx, "PodErc20CotiMother", mother.address);
+  return { mother: mother.address };
+};
+
+export const allowlistFactoryOnMother = async (
+  ctx: ConnectedNetwork,
+  params: { mother: `0x${string}`; sourceChainId: bigint; factory: `0x${string}` }
+) => {
+  const mother = await ctx.viem.getContractAt("PodErc20CotiMother", params.mother, {
+    client: { public: ctx.publicClient, wallet: ctx.walletClient },
+  });
+  const allowed = await mother.read.allowedFactories([params.sourceChainId, params.factory]);
+  if (allowed) {
+    console.log(
+      `[privacyPortal] factory already allowlisted on mother chain=${params.sourceChainId} factory=${params.factory}`
+    );
+    return;
+  }
+  console.log(
+    `[privacyPortal] allowlisting factory on mother chain=${params.sourceChainId} factory=${params.factory}...`
+  );
+  const hash = await mother.write.setAllowedFactory([params.sourceChainId, params.factory, true], {
+    account: ctx.deployer,
+  });
+  await waitMined(ctx.publicClient, hash);
+  console.log("[privacyPortal] factory allowlisted on mother");
+};
+
 export const deploySourceFactory = async (
   ctx: ConnectedNetwork,
-  params: { inbox: `0x${string}`; cotiChainId: bigint; owner?: `0x${string}` }
+  params: { inbox: `0x${string}`; cotiChainId: bigint; cotiMother: `0x${string}`; owner?: `0x${string}` }
 ): Promise<SourceFactoryDeployment> => {
   const owner = params.owner ?? ctx.deployer;
   console.log("[privacyPortal] deploying PrivacyPortal implementation...");
@@ -105,7 +151,14 @@ export const deploySourceFactory = async (
   console.log("[privacyPortal] deploying PrivacyPortalFactory...");
   const factory = await ctx.viem.deployContract(
     "PrivacyPortalFactory",
-    [owner, params.inbox, params.cotiChainId, podTokenImplementation.address, portalImplementation.address],
+    [
+      owner,
+      params.inbox,
+      params.cotiChainId,
+      params.cotiMother,
+      podTokenImplementation.address,
+      portalImplementation.address,
+    ],
     { client: { public: ctx.publicClient, wallet: ctx.walletClient } }
   );
   console.log(`[privacyPortal] PrivacyPortalFactory=${factory.address}`);
@@ -121,61 +174,18 @@ export const deploySourceFactory = async (
   };
 };
 
-export const deployCotiFactory = async (
-  ctx: ConnectedNetwork,
-  params: { inbox: `0x${string}`; owner?: `0x${string}` }
-): Promise<CotiFactoryDeployment> => {
-  const owner = params.owner ?? ctx.deployer;
-  console.log("[privacyPortal] deploying PodErc20CotiSideInitializable implementation...");
-  const cotiSideImplementation = await ctx.viem.deployContract("PodErc20CotiSideInitializable", [], {
-    client: { public: ctx.publicClient, wallet: ctx.walletClient },
-  });
-  console.log(`[privacyPortal] PodErc20CotiSideInitializable implementation=${cotiSideImplementation.address}`);
-
-  console.log("[privacyPortal] deploying PodErc20CotiSideFactory...");
-  const factory = await ctx.viem.deployContract(
-    "PodErc20CotiSideFactory",
-    [owner, params.inbox, cotiSideImplementation.address],
-    { client: { public: ctx.publicClient, wallet: ctx.walletClient } }
-  );
-  console.log(`[privacyPortal] PodErc20CotiSideFactory=${factory.address}`);
-
-  await logDeployment(ctx, "PodErc20CotiSideInitializable", cotiSideImplementation.address);
-  await logDeployment(ctx, "PodErc20CotiSideFactory", factory.address);
-
-  return { cotiSideImplementation: cotiSideImplementation.address, factory: factory.address };
-};
-
-export const createCotiSidePToken = async (
-  ctx: ConnectedNetwork,
-  params: { factory: `0x${string}`; owner?: `0x${string}` }
-): Promise<`0x${string}`> => {
-  const owner = params.owner ?? ctx.deployer;
-  const factory = await ctx.viem.getContractAt("PodErc20CotiSideFactory", params.factory, {
-    client: { public: ctx.publicClient, wallet: ctx.walletClient },
-  });
-  const nextIndex = await factory.read.allCotiSideTokensLength();
-
-  console.log(`[privacyPortal] creating COTI-side pToken clone with owner=${owner}...`);
-  const hash = await factory.write.createCotiSideToken([owner], { account: ctx.deployer });
-  await waitMined(ctx.publicClient, hash);
-  const cotiSideToken = await factory.read.allCotiSideTokens([nextIndex]);
-  console.log(`[privacyPortal] COTI-side pToken=${cotiSideToken}`);
-
-  await logDeployment(ctx, "PodErc20CotiSide", cotiSideToken);
-  return cotiSideToken;
-};
-
 export const createSourcePortalAndPToken = async (
   ctx: ConnectedNetwork,
   params: {
     factory: `0x${string}`;
     underlying: `0x${string}`;
-    cotiSideToken: `0x${string}`;
     name: string;
     symbol: string;
     decimals?: number;
     portalOwner?: `0x${string}`;
+    cotiCtx?: ConnectedNetwork;
+    cotiMother?: `0x${string}`;
+    cotiChainId?: bigint;
   }
 ): Promise<SourcePortalDeployment> => {
   const portalOwner = params.portalOwner ?? ctx.deployer;
@@ -184,12 +194,10 @@ export const createSourcePortalAndPToken = async (
     client: { public: ctx.publicClient, wallet: ctx.walletClient },
   });
 
-  console.log(
-    `[privacyPortal] creating portal pair underlying=${params.underlying} cotiSideToken=${params.cotiSideToken}...`
-  );
+  console.log(`[privacyPortal] creating portal pair underlying=${params.underlying}...`);
   const hash = await factory.write.createPortal(
-    [params.underlying, params.cotiSideToken, params.name, params.symbol, decimals, portalOwner],
-    { account: ctx.deployer }
+    [params.underlying, params.name, params.symbol, decimals, portalOwner],
+    { account: ctx.deployer, value: 2_500_000_000_000n }
   );
   await waitMined(ctx.publicClient, hash);
 
@@ -198,27 +206,49 @@ export const createSourcePortalAndPToken = async (
   console.log(`[privacyPortal] PrivacyPortal=${portal}`);
   console.log(`[privacyPortal] PoD pToken=${pToken}`);
 
+  if (params.cotiMother && params.cotiCtx) {
+    await waitForMotherRegistration({
+      cotiCtx: params.cotiCtx,
+      mother: params.cotiMother,
+      sourceChainId: BigInt(ctx.chainId),
+      pToken,
+      timeoutMs: 120_000,
+    });
+  }
+
   await logDeployment(ctx, "PrivacyPortal", portal);
   await logDeployment(ctx, "PodErc20Mintable", pToken);
   return { portal, pToken };
 };
 
-export const configureCotiSideRemote = async (
-  ctx: ConnectedNetwork,
-  params: { cotiSideToken: `0x${string}`; sourceChainId: bigint; sourcePToken: `0x${string}` }
-) => {
-  const cotiSideToken = await ctx.viem.getContractAt("PodErc20CotiSide", params.cotiSideToken, {
-    client: { public: ctx.publicClient, wallet: ctx.walletClient },
+export const waitForMotherRegistration = async (params: {
+  cotiCtx: ConnectedNetwork;
+  mother: `0x${string}`;
+  sourceChainId: bigint;
+  pToken: `0x${string}`;
+  timeoutMs?: number;
+  pollMs?: number;
+}) => {
+  const mother = await params.cotiCtx.viem.getContractAt("PodErc20CotiMother", params.mother, {
+    client: { public: params.cotiCtx.publicClient, wallet: params.cotiCtx.walletClient },
   });
-  console.log(
-    `[privacyPortal] configuring COTI pToken remote chain=${params.sourceChainId} pToken=${params.sourcePToken}...`
+  const deadline = Date.now() + (params.timeoutMs ?? 120_000);
+  const pollMs = params.pollMs ?? 3_000;
+
+  while (Date.now() < deadline) {
+    const registered = await mother.read.isRegistered([params.sourceChainId, params.pToken]);
+    if (registered) {
+      console.log(
+        `[privacyPortal] pToken registered on mother chain=${params.sourceChainId} pToken=${params.pToken}`
+      );
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+
+  throw new Error(
+    `Timed out waiting for mother registration chain=${params.sourceChainId} pToken=${params.pToken}`
   );
-  const hash = await cotiSideToken.write.setAuthorizedRemote(
-    [params.sourceChainId, params.sourcePToken],
-    { account: ctx.deployer }
-  );
-  await waitMined(ctx.publicClient, hash);
-  console.log("[privacyPortal] COTI pToken remote configured");
 };
 
 export const logDeployment = async (ctx: ConnectedNetwork, contract: string, address: `0x${string}`) => {

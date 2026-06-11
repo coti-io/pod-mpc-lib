@@ -1,5 +1,5 @@
 /**
- * Cross-chain `PodERC20` + `PodErc20CotiSide` tests (mint/sync, transfer, approve, pending, errors).
+ * Cross-chain `PodERC20` + `PodErc20CotiMother` tests (mint/sync, transfer, approve, pending, errors).
  *
  * These exercises COTI MPC on garbled 256-bit balances (`syncBalances` uses `offBoardToUser` per account). If
  * `batchProcessRequests` fails, try raising `COTI_MINE_GAS_POD_TOKEN`.
@@ -59,14 +59,13 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
   });
 
   before(async function () {
-    pt("before: connecting networks and deploying PodERC20 + PodErc20CotiSide");
-    // Fresh COTI inbox + token pairing avoids stale `raise`/nonce state vs newly deployed `PodErc20CotiSide`.
+    pt("before: connecting networks and deploying PodERC20 + PodErc20CotiMother");
+    // Fresh COTI inbox + mother registration avoids stale `raise`/nonce state vs newly deployed namespaces.
     if (process.env.COTI_REUSE_CONTRACTS === undefined) {
       process.env.COTI_REUSE_CONTRACTS = "false";
     }
     ctx = await setupPodTokenTestContext({ sepoliaViem, cotiViem });
     pt("before: seed Bob on COTI + sync so PoD balanceOf(Bob) is valid zero ciphertext (not uninitialized storage)");
-    await mintOnCoti(ctx, ctx.bob.address, 0n);
     await syncPodBalancesRoundTrip(ctx, [ctx.bob.address], "seedBobZero");
     pt(`before: ready (owner=${ctx.owner}, bob=${ctx.bob.address}, pod=${ctx.pod.address})`);
   });
@@ -144,7 +143,7 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
 
     assert.equal(await readDecryptedBalance(ctx, ctx.owner), ownerBefore + start - spendAmt);
     assert.equal(await readDecryptedBalance(ctx, ctx.bob.address), bobBefore + spendAmt);
-    // Allowance is not reduced on the PoD mirror today (`PodErc20CotiSide.transferFrom` does not touch garbled allowance);
+    // Allowance is not reduced on the PoD mirror today (`PodErc20CotiMother.transferFrom` does not touch garbled allowance);
     // balances above confirm approve + transferFrom round-trips succeeded.
     const after = await readDecryptedAllowance(ctx, ctx.owner, ctx.owner);
     assert.equal(after.ownerCt, allowanceAmt);
@@ -458,7 +457,7 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
       nonMinter,
       ctx.base.chainIds.coti,
       ctx.base.contracts.inboxSepolia.address,
-      ctx.podCotiSide.address,
+      ctx.podCotiMother.address,
       "Rogue",
       "ROGUE",
     ]);
@@ -482,7 +481,7 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
     const basePod = await sepoliaViem.deployContract("PodERC20", [
       ctx.base.chainIds.coti,
       ctx.base.contracts.inboxSepolia.address,
-      ctx.podCotiSide.address,
+      ctx.podCotiMother.address,
       "Base PoD",
       "BASE",
     ]);

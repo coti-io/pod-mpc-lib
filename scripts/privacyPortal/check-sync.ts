@@ -11,7 +11,6 @@ type TokenConfig = {
   decimals?: number;
   privacyPortal?: string;
   pToken?: string;
-  cotiSide?: string;
 };
 
 type NetworkConfig = {
@@ -19,7 +18,7 @@ type NetworkConfig = {
     factory?: string;
     portalImplementation?: string;
     podTokenImplementation?: string;
-    cotiSideImplementation?: string;
+    cotiMother?: string;
     cotiNetwork?: string;
   };
   tokens?: TokenConfig[];
@@ -48,34 +47,37 @@ const main = async () => {
   const sourceFactoryAddress = requireAddress(sourceConfig.privacyPortal.factory, "source factory");
   const portalImplementation = requireAddress(sourceConfig.privacyPortal.portalImplementation, "portal implementation");
   const podTokenImplementation = requireAddress(sourceConfig.privacyPortal.podTokenImplementation, "pod token implementation");
-  const cotiFactoryAddress = requireAddress(cotiConfig.privacyPortal.factory, "coti factory");
-  const cotiImplementation = requireAddress(cotiConfig.privacyPortal.cotiSideImplementation, "coti implementation");
+  const cotiMotherAddress = requireAddress(cotiConfig.privacyPortal.cotiMother, "coti mother");
 
   const sourceFactory = await source.viem.getContractAt("PrivacyPortalFactory", sourceFactoryAddress, {
     client: { public: source.publicClient, wallet: source.walletClient },
   });
-  const cotiFactory = await coti.viem.getContractAt("PodErc20CotiSideFactory", cotiFactoryAddress, {
+  const cotiMother = await coti.viem.getContractAt("PodErc20CotiMother", cotiMotherAddress, {
     client: { public: coti.publicClient, wallet: coti.walletClient },
   });
 
   const sourceFactoryPortalImpl = await sourceFactory.read.portalImplementation();
   const sourceFactoryTokenImpl = await sourceFactory.read.podTokenImplementation();
-  const cotiFactoryImpl = await cotiFactory.read.implementation();
+  const sourceFactoryMother = await sourceFactory.read.cotiMotherContract();
   if (sourceFactoryPortalImpl.toLowerCase() !== portalImplementation.toLowerCase()) {
     throw new Error(`Source factory portal implementation mismatch: ${sourceFactoryPortalImpl}`);
   }
   if (sourceFactoryTokenImpl.toLowerCase() !== podTokenImplementation.toLowerCase()) {
     throw new Error(`Source factory token implementation mismatch: ${sourceFactoryTokenImpl}`);
   }
-  if (cotiFactoryImpl.toLowerCase() !== cotiImplementation.toLowerCase()) {
-    throw new Error(`COTI factory implementation mismatch: ${cotiFactoryImpl}`);
+  if (sourceFactoryMother.toLowerCase() !== cotiMotherAddress.toLowerCase()) {
+    throw new Error(`Source factory COTI mother mismatch: ${sourceFactoryMother}`);
+  }
+
+  const factoryAllowed = await cotiMother.read.allowedFactories([BigInt(source.chainId), sourceFactoryAddress]);
+  if (!factoryAllowed) {
+    throw new Error(`Source factory not allowlisted on COTI mother: ${sourceFactoryAddress}`);
   }
 
   for (const token of sourceConfig.tokens ?? []) {
     const erc20 = requireAddress(token.erc20, `${token.symbol}.erc20`);
     const portal = requireAddress(token.privacyPortal, `${token.symbol}.privacyPortal`);
     const pToken = requireAddress(token.pToken, `${token.symbol}.pToken`);
-    const cotiSide = requireAddress(token.cotiSide, `${token.symbol}.cotiSide`);
     const decimals = token.decimals ?? 18;
 
     const mappedPortal = await sourceFactory.read.portalForUnderlying([erc20]);
@@ -97,9 +99,6 @@ const main = async () => {
     const pTokenContract = await source.viem.getContractAt("PodErc20MintableInitializable", pToken, {
       client: { public: source.publicClient, wallet: source.walletClient },
     });
-    const cotiSideContract = await coti.viem.getContractAt("PodErc20CotiSide", cotiSide, {
-      client: { public: coti.publicClient, wallet: coti.walletClient },
-    });
 
     const portalUnderlying = await portalContract.read.underlyingToken();
     const portalPToken = await portalContract.read.pToken();
@@ -107,17 +106,15 @@ const main = async () => {
     const pTokenDecimals = await pTokenContract.read.decimals();
     const pTokenCotiSide = await pTokenContract.read.cotiSideContract();
     const pTokenMinter = await pTokenContract.read.minter();
-    const remoteChain = await cotiSideContract.read.authorizedRemoteChainId();
-    const remoteContract = await cotiSideContract.read.authorizedRemoteContract();
+    const registered = await cotiMother.read.isRegistered([BigInt(source.chainId), pToken]);
 
     if (portalUnderlying.toLowerCase() !== erc20.toLowerCase()) throw new Error(`${token.symbol}: portal underlying mismatch`);
     if (portalPToken.toLowerCase() !== pToken.toLowerCase()) throw new Error(`${token.symbol}: portal pToken mismatch`);
     if (portalDecimals !== decimals) throw new Error(`${token.symbol}: portal decimals mismatch`);
     if (pTokenDecimals !== decimals) throw new Error(`${token.symbol}: pToken decimals mismatch`);
-    if (pTokenCotiSide.toLowerCase() !== cotiSide.toLowerCase()) throw new Error(`${token.symbol}: pToken COTI side mismatch`);
+    if (pTokenCotiSide.toLowerCase() !== cotiMotherAddress.toLowerCase()) throw new Error(`${token.symbol}: pToken COTI mother mismatch`);
     if (pTokenMinter.toLowerCase() !== portal.toLowerCase()) throw new Error(`${token.symbol}: pToken minter mismatch`);
-    if (remoteChain !== BigInt(source.chainId)) throw new Error(`${token.symbol}: COTI remote chain mismatch`);
-    if (remoteContract.toLowerCase() !== pToken.toLowerCase()) throw new Error(`${token.symbol}: COTI remote token mismatch`);
+    if (!registered) throw new Error(`${token.symbol}: pToken not registered on COTI mother`);
 
     console.log(`[privacyPortal:check] ${token.symbol}: ok`);
   }
