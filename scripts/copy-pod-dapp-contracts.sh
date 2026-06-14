@@ -10,8 +10,11 @@
 # Requires: bash, mkdir, and cp. No rsync or GNU install needed.
 #
 # Compile-time deps still come from npm (not copied here):
-#   - @coti-io/coti-contracts/contracts/utils/mpc/MpcCore.sol
 #   - @openzeppelin/contracts
+#
+# Vendored MPC core (copied below):
+#   - utils/mpc/MpcCore.sol
+#   - utils/mpc/MpcInterface.sol
 
 set -euo pipefail
 
@@ -44,6 +47,10 @@ FILES=(
   mpc/PodLib256.sol
   mpc/PodLib.sol
   mpccodec/MpcAbiCodec.sol
+
+  # Vendored COTI MPC core used by Pod contracts and pERC20 COTI side.
+  utils/mpc/MpcCore.sol
+  utils/mpc/MpcInterface.sol
 
   # Executor operation interfaces referenced by the Pod libraries.
   mpc/coti-side/IPodExecutorOps.sol

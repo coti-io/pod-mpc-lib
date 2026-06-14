@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.19;
 
-import "@coti-io/coti-contracts/contracts/utils/mpc/MpcCore.sol";
+import "../utils/mpc/MpcCore.sol";
 
 import "../IInbox.sol";
 
@@ -410,7 +410,7 @@ library MpcAbiCodec {
         if (dataType == MpcDataType.IT_UINT128) {
             itUint128 memory itValue = abi.decode(argData, (itUint128));
             emit ValidateCiphertextStart(uint8(dataType), argData.length, keccak256(argData));
-            gtUint128 memory gtValue = MpcCore.validateCiphertext(itValue);
+            gtUint128 gtValue = MpcCore.validateCiphertext(itValue);
             emit ValidateCiphertextSuccess(uint8(dataType));
             bytes memory encoded = abi.encode(gtValue);
             return (encoded, false, encoded.length / 32);
@@ -419,7 +419,7 @@ library MpcAbiCodec {
         if (dataType == MpcDataType.IT_UINT256) {
             itUint256 memory itValue = abi.decode(argData, (itUint256));
             emit ValidateCiphertextStart(uint8(dataType), argData.length, keccak256(argData));
-            gtUint256 memory gtValue = MpcCore.validateCiphertext(itValue);
+            gtUint256 gtValue = MpcCore.validateCiphertext(itValue);
             emit ValidateCiphertextSuccess(uint8(dataType));
             bytes memory encoded = abi.encode(gtValue);
             return (encoded, false, encoded.length / 32);

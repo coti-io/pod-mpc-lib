@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { decodeAbiParameters, defineChain, toFunctionSelector, toHex, zeroAddress } from "viem";
+import { createPublicClient, decodeAbiParameters, defineChain, http, toFunctionSelector, toHex, zeroAddress } from "viem";
 import {
   deployTestnetPriceOracle,
   podConfigureKeepInbox,
@@ -10,6 +10,7 @@ import {
 } from "../../scripts/deploy-utils.js";
 import { privateKeyToAccount } from "viem/accounts";
 import { ONBOARD_CONTRACT_ADDRESS, Wallet as CotiWallet } from "@coti-io/coti-ethers";
+import { decryptUint, decryptUint256 as sdkDecryptUint256, prepareIT, prepareIT256 } from "@coti-io/coti-sdk-typescript";
 import { JsonRpcProvider } from "ethers";
 
 /**
@@ -108,6 +109,56 @@ export const requirePrivateKey = (key: string) => {
 
 // Normalizes a private key to 0x-prefixed hex.
 export const normalizePrivateKey = (key: string) => (key.startsWith("0x") ? key : `0x${key}`);
+
+/** Minimum native balance to prefer a COTI test key (batch mines need ~0.4 COTI headroom each). */
+const MIN_COTI_TEST_BALANCE_WEI = 50_000_000_000_000_000n; // 0.05 COTI
+
+let cachedCotiPrivateKey: string | undefined;
+
+/**
+ * Picks a funded COTI testnet key. Order matches `hardhat.config.ts` plus `PRIVATE_KEY_ACCOUNT_2`.
+ * When `COTI_TESTNET_PRIVATE_KEY` is set but depleted, falls back to `_PRIVATE_KEY` / others.
+ */
+export const resolveCotiTestnetPrivateKey = async (rpcUrl?: string): Promise<string> => {
+  if (cachedCotiPrivateKey) return cachedCotiPrivateKey;
+
+  const candidates: Array<[string, string]> = [];
+  const addCandidate = (label: string, value: string | undefined) => {
+    const trimmed = value?.trim();
+    if (trimmed) candidates.push([label, trimmed]);
+  };
+  addCandidate("COTI_TESTNET_PRIVATE_KEY", process.env.COTI_TESTNET_PRIVATE_KEY);
+  addCandidate("_PRIVATE_KEY", process.env._PRIVATE_KEY);
+  addCandidate("PRIVATE_KEY_ACCOUNT_2", process.env.PRIVATE_KEY_ACCOUNT_2);
+  addCandidate("PRIVATE_KEY", process.env.PRIVATE_KEY);
+
+  if (candidates.length === 0) {
+    throw new Error("Missing COTI testnet private key (COTI_TESTNET_PRIVATE_KEY, _PRIVATE_KEY, or PRIVATE_KEY)");
+  }
+
+  const url = rpcUrl ?? requireEnv("COTI_TESTNET_RPC_URL");
+  const client = createPublicClient({ transport: http(url) });
+
+  for (const [label, pk] of candidates) {
+    const account = privateKeyToAccount(normalizePrivateKey(pk) as `0x${string}`);
+    const balance = await client.getBalance({ address: account.address });
+    if (balance >= MIN_COTI_TEST_BALANCE_WEI) {
+      logStep(`Using ${label} for COTI tests (${account.address}, ${Number(balance) / 1e18} COTI)`);
+      cachedCotiPrivateKey = pk;
+      return pk;
+    }
+  }
+
+  const [fallbackLabel, fallbackPk] = candidates[0];
+  const account = privateKeyToAccount(normalizePrivateKey(fallbackPk) as `0x${string}`);
+  const balance = await client.getBalance({ address: account.address });
+  logStep(
+    `Warning: all COTI keys below ${Number(MIN_COTI_TEST_BALANCE_WEI) / 1e18} COTI; using ${fallbackLabel} ` +
+      `(${account.address}, ${Number(balance) / 1e18} COTI)`
+  );
+  cachedCotiPrivateKey = fallbackPk;
+  return fallbackPk;
+};
 
 // Returns a trimmed environment variable or empty string.
 export const envOrEmpty = (key: string) => process.env[key]?.trim() ?? "";
@@ -376,7 +427,14 @@ export const onboardUser = async (privateKey: string, rpcUrl: string, onboardAdd
   }
 
   const envKey = process.env[keyEnv];
-  if (envKey) {
+  const envKeyOwner =
+    process.env[`${keyEnv}_FOR_PRIVATE_KEY`] ??
+    (keyEnv === "COTI_AES_KEY" ? process.env.COTI_AES_KEY_FOR_PRIVATE_KEY : undefined);
+  if (
+    envKey &&
+    envKeyOwner &&
+    normalizePrivateKeyId(envKeyOwner) === privateKeyId
+  ) {
     const normalizedEnvKey = envKey.replace(/^0x/, "");
     aesKeyCache.set(cacheId, normalizedEnvKey);
     return normalizedEnvKey;
@@ -391,7 +449,23 @@ export const onboardUser = async (privateKey: string, rpcUrl: string, onboardAdd
     logStep("Onboarding user via coti-ethers");
     const provider = new JsonRpcProvider(rpcUrl) as any;
     const wallet = new CotiWallet(privateKey, provider);
-    await wallet.generateOrRecoverAes(onboardAddress);
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await wallet.generateOrRecoverAes(onboardAddress);
+        lastErr = undefined;
+        break;
+      } catch (err) {
+        lastErr = err;
+        if (attempt < 2) {
+          logStep(`Onboarding attempt ${attempt + 1} failed, retrying...`);
+          await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+        }
+      }
+    }
+    if (lastErr) {
+      throw lastErr;
+    }
     let key = wallet.getUserOnboardInfo()?.aesKey;
     if (!key) {
       throw new Error("Failed to onboard user: missing AES key");
@@ -407,6 +481,7 @@ export const onboardUser = async (privateKey: string, rpcUrl: string, onboardAdd
     aesKeyCache.set(cacheId, key);
     process.env.COTI_AES_KEY = key;
     process.env.COTI_AES_KEY_FOR_PRIVATE_KEY = privateKeyId;
+    process.env[`${keyEnv}_FOR_PRIVATE_KEY`] = privateKeyId;
     aesKeyPromiseCache.delete(cacheId);
     return key;
   })();
@@ -844,144 +919,102 @@ export const combine64PartsTo256 = (
   return (highHigh << 192n) | (highLow << 128n) | (lowHigh << 64n) | lowLow;
 };
 
-// Encrypt a 128-bit value as an itUint128 structure (2 x 64-bit parts, bytes[2] signature).
+// Encrypt a 128-bit value as an itUint128 structure (single ciphertext + signature).
 export const buildEncryptedInput128 = async (
   ctx: MpcEncryptContext,
   value: bigint
 ): Promise<{
-  ciphertext: { high: bigint; low: bigint };
-  signature: [`0x${string}`, `0x${string}`];
+  ciphertext: bigint;
+  signature: `0x${string}`;
 }> => {
   const functionSelector = toFunctionSelector(
     "batchProcessRequests(uint256,(bytes32,address,address,(bytes4,bytes,bytes8[],bytes32[]),bytes4,bytes4,bool,bytes32,uint256,uint256)[])"
   );
 
-  const [high, low] = split128To64Parts(value);
+  const it = prepareIT(value, {
+    wallet: ctx.crypto.cotiEncryptWallet as any,
+    userKey: ctx.crypto.userKey,
+  }, ctx.contracts.inboxCoti.address, functionSelector);
 
-  const encryptPart = async (part: bigint) => {
-    const inputText = await ctx.crypto.cotiEncryptWallet.encryptValue(
-      part,
-      ctx.contracts.inboxCoti.address,
-      functionSelector
-    );
-    const signature =
-      typeof inputText.signature === "string"
-        ? (inputText.signature as `0x${string}`)
-        : toHex(inputText.signature as any);
-    const ciphertext = normalizeCiphertextInternal(inputText.ciphertext);
-    return { ciphertext, signature };
-  };
-
-  const encHigh = await encryptPart(high);
-  const encLow = await encryptPart(low);
+  const signature =
+    typeof it.signature === "string"
+      ? (it.signature as `0x${string}`)
+      : toHex(it.signature as any);
 
   return {
-    ciphertext: { high: encHigh.ciphertext, low: encLow.ciphertext },
-    signature: [encHigh.signature, encLow.signature],
+    ciphertext: it.ciphertext,
+    signature,
   };
 };
 
-// Decode a ctUint128 structure into its 2 component ciphertext values.
-export const decodeCtUint128 = (
-  encryptedResult: unknown
-): { high: bigint; low: bigint } => {
-  const high = getTupleField(encryptedResult, "high", 0);
-  const low = getTupleField(encryptedResult, "low", 1);
-  return { high: BigInt(high ?? 0), low: BigInt(low ?? 0) };
+// Decode a ctUint128 value (single uint256 ciphertext).
+export const decodeCtUint128 = (encryptedResult: unknown): bigint => {
+  return BigInt(
+    getTupleField(encryptedResult, "ciphertext", 0) ??
+      getTupleField(encryptedResult, "value", 0) ??
+      encryptedResult ??
+      0
+  );
 };
 
 // Decrypt a ctUint128 result into a 128-bit value.
 export const decryptUint128 = (
   encryptedResult: unknown,
   userKey: string,
-  decryptFn: (ct: bigint, key: string) => bigint
+  decryptFn: (ct: bigint, key: string) => bigint = decryptUint
 ): bigint => {
-  const { high, low } = decodeCtUint128(encryptedResult);
-  const decHigh = decryptFn(high, userKey);
-  const decLow = decryptFn(low, userKey);
-  return combine64PartsTo128(decHigh, decLow);
+  const ct = decodeCtUint128(encryptedResult);
+  return decryptFn(ct, userKey);
 };
 
 // Encrypt a 256-bit value as an itUint256 structure.
-// This encrypts 4 separate 64-bit values and returns the structured type.
 export const buildEncryptedInput256 = async (
   ctx: MpcEncryptContext,
   value: bigint
 ): Promise<{
-  ciphertext: {
-    high: { high: bigint; low: bigint };
-    low: { high: bigint; low: bigint };
-  };
-  signature: [[`0x${string}`, `0x${string}`], [`0x${string}`, `0x${string}`]];
+  ciphertext: { ciphertextHigh: bigint; ciphertextLow: bigint };
+  signature: `0x${string}`;
 }> => {
   const functionSelector = toFunctionSelector(
     "batchProcessRequests(uint256,(bytes32,address,address,(bytes4,bytes,bytes8[],bytes32[]),bytes4,bytes4,bool,bytes32,uint256,uint256)[])"
   );
 
-  // Split the 256-bit value into 4 x 64-bit parts
-  const [highHigh, highLow, lowHigh, lowLow] = split256To64Parts(value);
+  const it = prepareIT256(value, {
+    wallet: ctx.crypto.cotiEncryptWallet as any,
+    userKey: ctx.crypto.userKey,
+  }, ctx.contracts.inboxCoti.address, functionSelector);
 
-  // Encrypt each 64-bit part
-  const encryptPart = async (part: bigint) => {
-    const inputText = await ctx.crypto.cotiEncryptWallet.encryptValue(
-      part,
-      ctx.contracts.inboxCoti.address,
-      functionSelector
-    );
-    const signature =
-      typeof inputText.signature === "string"
-        ? (inputText.signature as `0x${string}`)
-        : toHex(inputText.signature as any);
-    const ciphertext = normalizeCiphertextInternal(inputText.ciphertext);
-    return { ciphertext, signature };
-  };
-
-  const encHighHigh = await encryptPart(highHigh);
-  const encHighLow = await encryptPart(highLow);
-  const encLowHigh = await encryptPart(lowHigh);
-  const encLowLow = await encryptPart(lowLow);
+  const signature =
+    typeof it.signature === "string"
+      ? (it.signature as `0x${string}`)
+      : toHex(it.signature as any);
 
   return {
-    ciphertext: {
-      high: { high: encHighHigh.ciphertext, low: encHighLow.ciphertext },
-      low: { high: encLowHigh.ciphertext, low: encLowLow.ciphertext },
-    },
-    signature: [
-      [encHighHigh.signature, encHighLow.signature],
-      [encLowHigh.signature, encLowLow.signature],
-    ],
+    ciphertext: it.ciphertext,
+    signature,
   };
 };
 
-// Decode a ctUint256 structure into its 4 component ciphertext values.
+// Decode a ctUint256 structure.
 export const decodeCtUint256 = (
   encryptedResult: unknown
-): { highHigh: bigint; highLow: bigint; lowHigh: bigint; lowLow: bigint } => {
-  const high = getTupleField(encryptedResult, "high", 0);
-  const low = getTupleField(encryptedResult, "low", 1);
-
-  const highHigh = getTupleField(high, "high", 0);
-  const highLow = getTupleField(high, "low", 1);
-  const lowHigh = getTupleField(low, "high", 0);
-  const lowLow = getTupleField(low, "low", 1);
-
-  return { highHigh, highLow, lowHigh, lowLow };
+): { ciphertextHigh: bigint; ciphertextLow: bigint } => {
+  const ciphertextHigh = getTupleField(encryptedResult, "ciphertextHigh", 0);
+  const ciphertextLow = getTupleField(encryptedResult, "ciphertextLow", 1);
+  return {
+    ciphertextHigh: BigInt(ciphertextHigh ?? 0),
+    ciphertextLow: BigInt(ciphertextLow ?? 0),
+  };
 };
 
 // Decrypt a ctUint256 result into a 256-bit value.
 export const decryptUint256 = (
   encryptedResult: unknown,
   userKey: string,
-  decryptFn: (ct: bigint, key: string) => bigint
+  _decryptFn?: (ct: bigint, key: string) => bigint
 ): bigint => {
-  const { highHigh, highLow, lowHigh, lowLow } = decodeCtUint256(encryptedResult);
-
-  const decHighHigh = decryptFn(highHigh, userKey);
-  const decHighLow = decryptFn(highLow, userKey);
-  const decLowHigh = decryptFn(lowHigh, userKey);
-  const decLowLow = decryptFn(lowLow, userKey);
-
-  return combine64PartsTo256(decHighHigh, decHighLow, decLowHigh, decLowLow);
+  const { ciphertextHigh, ciphertextLow } = decodeCtUint256(encryptedResult);
+  return sdkDecryptUint256({ ciphertextHigh, ciphertextLow }, userKey);
 };
 
 // Normalizes ciphertext into a bigint.
@@ -1005,8 +1038,8 @@ export const setupContext = async (params: {
   /** Defaults to `MpcAdder`; use `MpcAdderPausable` for retry/pause system tests. */
   podAdderContractName?: "MpcAdder" | "MpcAdderPausable";
 }): Promise<TestContext> => {
-  requireEnv("COTI_TESTNET_RPC_URL");
-  requirePrivateKey("COTI_TESTNET_PRIVATE_KEY");
+  const cotiRpcUrl = requireEnv("COTI_TESTNET_RPC_URL");
+  const cotiPrivateKeyMain = normalizePrivateKey(await resolveCotiTestnetPrivateKey(cotiRpcUrl));
 
   const sepoliaChainId = parseInt(process.env.HARDHAT_CHAIN_ID || "31337");
   const cotiChainId = BigInt(parseInt(process.env.COTI_TESTNET_CHAIN_ID || "7082400"));
@@ -1019,14 +1052,13 @@ export const setupContext = async (params: {
     name: "COTI Testnet",
     nativeCurrency: { name: "COTI", symbol: "COTI", decimals: 18 },
     rpcUrls: {
-      default: { http: [requireEnv("COTI_TESTNET_RPC_URL")] },
+      default: { http: [cotiRpcUrl] },
     },
   });
 
   const sepoliaPublicClient = await params.sepoliaViem.getPublicClient();
   const cotiPublicClient = await params.cotiViem.getPublicClient({ chain: cotiChain });
   const [sepoliaWallet] = await params.sepoliaViem.getWalletClients();
-  const cotiPrivateKeyMain = normalizePrivateKey(requirePrivateKey("COTI_TESTNET_PRIVATE_KEY"));
   const cotiAccount = privateKeyToAccount(cotiPrivateKeyMain as `0x${string}`);
   const hardhatCotiWallet = await params.sepoliaViem.getWalletClient(cotiAccount.address);
   const cotiWallet = await params.cotiViem.getWalletClient(cotiAccount.address, { chain: cotiChain });
@@ -1165,9 +1197,8 @@ export const setupContext = async (params: {
     logStep("Sepolia miner already configured");
   }
 
-  const cotiRpcUrl = requireEnv("COTI_TESTNET_RPC_URL");
   const cotiProvider = new JsonRpcProvider(cotiRpcUrl) as any;
-  const cotiPrivateKey = requirePrivateKey("COTI_TESTNET_PRIVATE_KEY");
+  const cotiPrivateKey = await resolveCotiTestnetPrivateKey(cotiRpcUrl);
   const onboardAddress = process.env.COTI_ONBOARD_CONTRACT_ADDRESS || ONBOARD_CONTRACT_ADDRESS;
   const userKey = await onboardUser(cotiPrivateKey, cotiRpcUrl, onboardAddress);
   const cotiEncryptWallet = new CotiWallet(cotiPrivateKey, cotiProvider as any);
@@ -1214,8 +1245,8 @@ export const setupContextWideMpc = async (
   params: { sepoliaViem: any; cotiViem: any },
   config: MpcWideSetupConfig
 ): Promise<TestContextWideMpc> => {
-  requireEnv("COTI_TESTNET_RPC_URL");
-  requirePrivateKey("COTI_TESTNET_PRIVATE_KEY");
+  const cotiRpcUrl = requireEnv("COTI_TESTNET_RPC_URL");
+  const cotiPrivateKeyMain = normalizePrivateKey(await resolveCotiTestnetPrivateKey(cotiRpcUrl));
 
   const sepoliaChainId = parseInt(process.env.HARDHAT_CHAIN_ID || "31337");
   const cotiChainId = BigInt(parseInt(process.env.COTI_TESTNET_CHAIN_ID || "7082400"));
@@ -1229,14 +1260,13 @@ export const setupContextWideMpc = async (
     name: "COTI Testnet",
     nativeCurrency: { name: "COTI", symbol: "COTI", decimals: 18 },
     rpcUrls: {
-      default: { http: [requireEnv("COTI_TESTNET_RPC_URL")] },
+      default: { http: [cotiRpcUrl] },
     },
   });
 
   const sepoliaPublicClient = await params.sepoliaViem.getPublicClient();
   const cotiPublicClient = await params.cotiViem.getPublicClient({ chain: cotiChain });
   const [sepoliaWallet] = await params.sepoliaViem.getWalletClients();
-  const cotiPrivateKeyMain = normalizePrivateKey(requirePrivateKey("COTI_TESTNET_PRIVATE_KEY"));
   const cotiAccount = privateKeyToAccount(cotiPrivateKeyMain as `0x${string}`);
   const hardhatCotiWallet = await params.sepoliaViem.getWalletClient(cotiAccount.address);
   const cotiWallet = await params.cotiViem.getWalletClient(cotiAccount.address, { chain: cotiChain });
@@ -1384,9 +1414,8 @@ export const setupContextWideMpc = async (
     logStep("Sepolia miner already configured");
   }
 
-  const cotiRpcUrl = requireEnv("COTI_TESTNET_RPC_URL");
   const cotiProvider = new JsonRpcProvider(cotiRpcUrl) as any;
-  const cotiPrivateKey = requirePrivateKey("COTI_TESTNET_PRIVATE_KEY");
+  const cotiPrivateKey = await resolveCotiTestnetPrivateKey(cotiRpcUrl);
   const onboardAddress = process.env.COTI_ONBOARD_CONTRACT_ADDRESS || ONBOARD_CONTRACT_ADDRESS;
   const userKey = await onboardUser(cotiPrivateKey, cotiRpcUrl, onboardAddress);
   const cotiEncryptWallet = new CotiWallet(cotiPrivateKey, cotiProvider as any);
@@ -1489,8 +1518,8 @@ export const setupPodTestContext = async (params: {
   /** When true with `COTI_REUSE_CONTRACTS=true`, redeploy only `MpcExecutor` and keep the cached inbox. */
   forceRedeployCotiExecutor?: boolean;
 }): Promise<PodTestContext> => {
-  requireEnv("COTI_TESTNET_RPC_URL");
-  requirePrivateKey("COTI_TESTNET_PRIVATE_KEY");
+  const cotiRpcUrl = requireEnv("COTI_TESTNET_RPC_URL");
+  const cotiPrivateKeyMain = normalizePrivateKey(await resolveCotiTestnetPrivateKey(cotiRpcUrl));
 
   const { hh, sep } = podTestEnvKeys(params.podContractName);
   const sepoliaChainId = parseInt(process.env.HARDHAT_CHAIN_ID || "31337");
@@ -1504,14 +1533,13 @@ export const setupPodTestContext = async (params: {
     name: "COTI Testnet",
     nativeCurrency: { name: "COTI", symbol: "COTI", decimals: 18 },
     rpcUrls: {
-      default: { http: [requireEnv("COTI_TESTNET_RPC_URL")] },
+      default: { http: [cotiRpcUrl] },
     },
   });
 
   const sepoliaPublicClient = await params.sepoliaViem.getPublicClient();
   const cotiPublicClient = await params.cotiViem.getPublicClient({ chain: cotiChain });
   const [sepoliaWallet] = await params.sepoliaViem.getWalletClients();
-  const cotiPrivateKeyMain = normalizePrivateKey(requirePrivateKey("COTI_TESTNET_PRIVATE_KEY"));
   const cotiAccount = privateKeyToAccount(cotiPrivateKeyMain as `0x${string}`);
   const hardhatCotiWallet = await params.sepoliaViem.getWalletClient(cotiAccount.address);
   const cotiWallet = await params.cotiViem.getWalletClient(cotiAccount.address, { chain: cotiChain });
@@ -1674,9 +1702,8 @@ export const setupPodTestContext = async (params: {
     logStep("Sepolia miner already configured");
   }
 
-  const cotiRpcUrl = requireEnv("COTI_TESTNET_RPC_URL");
   const cotiProvider = new JsonRpcProvider(cotiRpcUrl) as any;
-  const cotiPrivateKey = requirePrivateKey("COTI_TESTNET_PRIVATE_KEY");
+  const cotiPrivateKey = await resolveCotiTestnetPrivateKey(cotiRpcUrl);
   const onboardAddress = process.env.COTI_ONBOARD_CONTRACT_ADDRESS || ONBOARD_CONTRACT_ADDRESS;
   const userKey = await onboardUser(cotiPrivateKey, cotiRpcUrl, onboardAddress);
   const cotiEncryptWallet = new CotiWallet(cotiPrivateKey, cotiProvider as any);
@@ -1787,61 +1814,30 @@ export const decodePodPlainUint256 = (data: `0x${string}`): bigint => {
   return v as bigint;
 };
 
-/** Decode `abi.encode(ctUint128)` from executor respond payload. */
-export const decodePodCtUint128Struct = (
-  data: `0x${string}`
-): { high: bigint; low: bigint } => {
-  const [t] = decodeAbiParameters(
-    [
-      {
-        type: "tuple",
-        name: "ct",
-        components: [
-          { name: "high", type: "uint256" },
-          { name: "low", type: "uint256" },
-        ],
-      },
-    ],
-    data
-  );
-  return t as { high: bigint; low: bigint };
+/** Decode `abi.encode(ctUint128)` from executor respond payload (single uint256 ciphertext). */
+export const decodePodCtUint128Struct = (data: `0x${string}`): bigint => {
+  const [v] = decodeAbiParameters([{ type: "uint256", name: "ciphertext" }], data);
+  return v as bigint;
 };
 
 /** Decode `abi.encode(ctUint256)` from executor respond payload. */
 export const decodePodCtUint256Struct = (
   data: `0x${string}`
-): { high: { high: bigint; low: bigint }; low: { high: bigint; low: bigint } } => {
+): { ciphertextHigh: bigint; ciphertextLow: bigint } => {
   const [t] = decodeAbiParameters(
     [
       {
         type: "tuple",
         name: "ct",
         components: [
-          {
-            name: "high",
-            type: "tuple",
-            components: [
-              { name: "high", type: "uint256" },
-              { name: "low", type: "uint256" },
-            ],
-          },
-          {
-            name: "low",
-            type: "tuple",
-            components: [
-              { name: "high", type: "uint256" },
-              { name: "low", type: "uint256" },
-            ],
-          },
+          { name: "ciphertextHigh", type: "uint256" },
+          { name: "ciphertextLow", type: "uint256" },
         ],
       },
     ],
     data
   );
-  return t as {
-    high: { high: bigint; low: bigint };
-    low: { high: bigint; low: bigint };
-  };
+  return t as { ciphertextHigh: bigint; ciphertextLow: bigint };
 };
 
 /**

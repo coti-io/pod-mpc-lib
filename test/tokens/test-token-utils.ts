@@ -6,6 +6,7 @@ import { ONBOARD_CONTRACT_ADDRESS, transferNative, Wallet as CotiWallet } from "
 import { encodeFunctionData, parseAbi } from "viem";
 import {
   buildEncryptedInput256,
+  decodeCtUint256,
   decryptUint256,
   fundContractForInboxFees,
   getLatestRequest,
@@ -15,7 +16,7 @@ import {
   onboardUser,
   receiptWaitOptions,
   requireEnv,
-  requirePrivateKey,
+  resolveCotiTestnetPrivateKey,
   runCrossChainTwoWayRoundTrip,
   setupContext,
   podTwoWayWriteOptions,
@@ -164,7 +165,7 @@ export async function setupPodTokenTestContext(params: {
 }): Promise<PodTokenTestContext> {
   const base = await setupContext(params);
 
-  const cotiPk = normalizePrivateKey(requirePrivateKey("COTI_TESTNET_PRIVATE_KEY"));
+  const cotiPk = normalizePrivateKey(await resolveCotiTestnetPrivateKey());
   const cotiAccount = privateKeyToAccount(cotiPk as `0x${string}`);
   const owner = cotiAccount.address;
   const hardhatCotiWallet = await params.sepoliaViem.getWalletClient(owner);
@@ -336,12 +337,21 @@ export function userKeyForAccount(ctx: PodTokenTestContext, account: `0x${string
   throw new Error(`No AES key configured for ${account}`);
 }
 
+/** Uninitialized PoD `_balances` is `(0,0)`; COTI may already hold garbled zero before the first mirrored nonce. */
+const isUninitializedPodBalanceCt = (ct: unknown): boolean => {
+  const { ciphertextHigh, ciphertextLow } = decodeCtUint256(ct);
+  return ciphertextHigh === 0n && ciphertextLow === 0n;
+};
+
 /** Decrypts `PodERC20.balanceOf(account)` using the matching onboarded user key. */
 export async function readDecryptedBalance(
   ctx: PodTokenTestContext,
   account: `0x${string}`
 ): Promise<bigint> {
   const ct = await ctx.pod.read.balanceOf([account]);
+  if (isUninitializedPodBalanceCt(ct)) {
+    return 0n;
+  }
   return decryptUint256(ct, userKeyForAccount(ctx, account), decryptUint);
 }
 
@@ -351,7 +361,9 @@ export async function readBalanceWithPending(
   account: `0x${string}`
 ): Promise<{ balance: bigint; pending: boolean }> {
   const [ct, pending] = await ctx.pod.read.balanceOfWithStatus([account]);
-  const balance = await decryptUint256(ct, userKeyForAccount(ctx, account), decryptUint);
+  const balance = isUninitializedPodBalanceCt(ct)
+    ? 0n
+    : decryptUint256(ct, userKeyForAccount(ctx, account), decryptUint);
   return { balance, pending };
 }
 

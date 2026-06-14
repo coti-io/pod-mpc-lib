@@ -82,16 +82,14 @@ function decryptU64Payload(raw: `0x${string}`, userKey: string): bigint {
 }
 
 function decryptU128Payload(raw: `0x${string}`, userKey: string): bigint {
-  const st = decodePodCtUint128Struct(raw);
-  return decryptUint128({ high: st.high, low: st.low }, userKey, decryptUint);
+  return decryptUint128(decodePodCtUint128Struct(raw), userKey, decryptUint);
 }
 
 function decryptU256Payload(raw: `0x${string}`, userKey: string): bigint {
-  const st = decodePodCtUint256Struct(raw);
-  return decryptUint256(st, userKey, decryptUint);
+  return decryptUint256(decodePodCtUint256Struct(raw), userKey, decryptUint);
 }
 
-describe("Pod MPC operations (system)", async function () {
+describe("Pod MPC operations (system)", { concurrency: 1 }, async function () {
   const { viem: sepoliaViem } = await network.connect({ network: "hardhat" });
   const { viem: cotiViem } = await network.connect({ network: "cotiTestnet" });
 

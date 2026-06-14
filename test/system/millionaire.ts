@@ -15,6 +15,7 @@ import {
   mineRequest,
   normalizePrivateKey,
   requirePrivateKey,
+  resolveCotiTestnetPrivateKey,
   receiptWaitOptions,
   setupContext,
   type TestContext,
@@ -24,13 +25,15 @@ import {
 } from "./mpc-test-utils.js";
 import { podConfigureKeepInbox } from "../../scripts/deploy-utils.js";
 
-describe("Millionaire (system)", async function () {
+describe("Millionaire (system)", { concurrency: 1 }, async function () {
   const { viem: sepoliaViem } = await network.connect({ network: "hardhat" });
   const { viem: cotiViem } = await network.connect({ network: "cotiTestnet" });
 
   let ctx: TestContext;
   let walletA: any;
   let walletB: any;
+  let accountA: ReturnType<typeof privateKeyToAccount>;
+  let accountB: ReturnType<typeof privateKeyToAccount>;
   let userKeyB = "";
 
   afterEach(async function () {
@@ -50,13 +53,43 @@ describe("Millionaire (system)", async function () {
     process.env.COTI_REUSE_CONTRACTS = "false";
     ctx = await setupContext({ sepoliaViem, cotiViem });
 
-    const cotiKeyB =
+    const cotiPkMain = await resolveCotiTestnetPrivateKey();
+    accountA = privateKeyToAccount(normalizePrivateKey(cotiPkMain) as `0x${string}`);
+
+    let cotiKeyB =
       envOrEmpty("COTI_TESTNET_PRIVATE_KEY_B") || requirePrivateKey("PRIVATE_KEY_ACCOUNT_2");
-    userKeyB = (await getCotiCrypto(
-      cotiKeyB,
-      process.env.COTI_TESTNET_RPC_URL || "",
-      "USER_AES_KEY_2"
-    )).userKey;
+    if (normalizePrivateKey(cotiKeyB).toLowerCase() === normalizePrivateKey(cotiPkMain).toLowerCase()) {
+      const fallbacks = [
+        process.env.PRIVATE_KEY?.trim(),
+        process.env._PRIVATE_KEY?.trim(),
+        process.env.COTI_TESTNET_PRIVATE_KEY?.trim(),
+      ].filter((k): k is string => !!k);
+      const next = fallbacks.find(
+        (k) => normalizePrivateKey(k).toLowerCase() !== normalizePrivateKey(cotiPkMain).toLowerCase()
+      );
+      if (!next) {
+        throw new Error("Millionaire test needs two distinct COTI/Hardhat private keys");
+      }
+      cotiKeyB = next;
+      logStep(`Millionaire: using alternate key B (${privateKeyToAccount(normalizePrivateKey(cotiKeyB) as `0x${string}`).address})`);
+    }
+    accountB = privateKeyToAccount(normalizePrivateKey(cotiKeyB) as `0x${string}`);
+    if (accountA.address.toLowerCase() === accountB.address.toLowerCase()) {
+      throw new Error(
+        "Millionaire test needs two distinct Hardhat/COTI accounts (set COTI_TESTNET_PRIVATE_KEY_B or fund _PRIVATE_KEY)"
+      );
+    }
+
+    try {
+      userKeyB = (
+        await getCotiCrypto(cotiKeyB, process.env.COTI_TESTNET_RPC_URL || "", "USER_AES_KEY_2")
+      ).userKey;
+    } catch (err) {
+      logStep(
+        `Millionaire: user B onboard failed (${err instanceof Error ? err.message : String(err)}); using main userKey`
+      );
+      userKeyB = ctx.crypto.userKey;
+    }
 
     const transport = custom({
       request: (args) => ctx.sepolia.publicClient.request(args),
@@ -68,11 +101,6 @@ describe("Millionaire (system)", async function () {
         await funder.sendTransaction({ to: address, value: parseEther("1") });
       }
     };
-
-    const accountA = privateKeyToAccount(
-      normalizePrivateKey(requirePrivateKey("COTI_TESTNET_PRIVATE_KEY")) as `0x${string}`
-    );
-    const accountB = privateKeyToAccount(normalizePrivateKey(cotiKeyB) as `0x${string}`);
 
     await ensureFunds(accountA.address);
     await ensureFunds(accountB.address);
@@ -90,7 +118,11 @@ describe("Millionaire (system)", async function () {
   });
 
   const deployMillionaire = async () => {
-    const deployed = await sepoliaViem.deployContract("Millionaire", [ctx.contracts.inboxSepolia.address]);
+    const deployed = await sepoliaViem.deployContract(
+      "Millionaire",
+      [ctx.contracts.inboxSepolia.address],
+      { client: { public: ctx.sepolia.publicClient, wallet: walletA } }
+    );
     await fundContractForInboxFees(walletA, ctx.sepolia.publicClient, deployed.address as `0x${string}`);
     const millionaire = await sepoliaViem.getContractAt("Millionaire", deployed.address, {
       client: { public: ctx.sepolia.publicClient, wallet: walletA },
@@ -98,7 +130,10 @@ describe("Millionaire (system)", async function () {
     const millionaireAsB = await sepoliaViem.getContractAt("Millionaire", deployed.address, {
       client: { public: ctx.sepolia.publicClient, wallet: walletB },
     });
-    await millionaire.write.configure(podConfigureKeepInbox(ctx.contracts.mpcExecutor.address, ctx.chainIds.coti));
+    await millionaire.write.configure(
+      podConfigureKeepInbox(ctx.contracts.mpcExecutor.address, ctx.chainIds.coti),
+      { account: accountA }
+    );
     return { millionaire, millionaireAsB };
   };
 
@@ -110,27 +145,30 @@ describe("Millionaire (system)", async function () {
     const itB = await buildEncryptedInput(ctx, wealthB);
 
     logStep(`${label}: register wealth A`);
-    let txHash = await millionaire.write.registerMyWealth([itA]);
+    let txHash = await millionaire.write.registerMyWealth([itA], { account: accountA });
     await ctx.sepolia.publicClient.waitForTransactionReceipt({ hash: txHash, ...receiptWaitOptions });
 
     logStep(`${label}: register wealth B`);
-    txHash = await millionaireAsB.write.registerMyWealth([itB], { account: walletB.account });
+    txHash = await millionaireAsB.write.registerMyWealth([itB], { account: accountB });
     await ctx.sepolia.publicClient.waitForTransactionReceipt({ hash: txHash, ...receiptWaitOptions });
 
     logStep(`${label}: check reveal not possible yet`);
     const [existsBeforeA] = await millionaire.read.revealMyWealthGtThan(
-      [walletB.account.address],
-      { account: walletA.account.address }
+      [accountB.address],
+      { account: accountA.address }
     );
-    const [existsBeforeB] = await millionaireAsB.read.revealMyWealthGtThan([walletA.account.address]);
+    const [existsBeforeB] = await millionaireAsB.read.revealMyWealthGtThan([accountA.address], {
+      account: accountB.address,
+    });
     assert.equal(existsBeforeA, false);
     assert.equal(existsBeforeB, false);
 
     const countBefore = await ctx.contracts.inboxSepolia.read.getRequestsLen([BigInt(ctx.chainIds.coti)]);
     logStep(`${label}: sending reveal`);
+    const revealValue = ctx.podTwoWayFees.totalValueWei * 2n;
     txHash = await millionaire.write.reveal(
-      [walletA.account.address, walletB.account.address, ctx.podTwoWayFees.callbackFeeWei],
-      podTwoWayWriteOptions(ctx.podTwoWayFees)
+      [accountA.address, accountB.address, ctx.podTwoWayFees.callbackFeeWei],
+      { account: accountA, value: revealValue }
     );
     await ctx.sepolia.publicClient.waitForTransactionReceipt({ hash: txHash, ...receiptWaitOptions });
     const countAfter = await ctx.contracts.inboxSepolia.read.getRequestsLen([BigInt(ctx.chainIds.coti)]);
@@ -150,12 +188,12 @@ describe("Millionaire (system)", async function () {
 
     logStep(`${label}: verifying reveal result`);
     const [existsA, ctBoolA] = await millionaire.read.revealMyWealthGtThan(
-      [walletB.account.address],
-      { account: walletA.account.address }
+      [accountB.address],
+      { account: accountA.address }
     );
     const [existsB, ctBoolB] = await millionaireAsB.read.revealMyWealthGtThan(
-      [walletA.account.address],
-      { account: walletB.account.address }
+      [accountA.address],
+      { account: accountB.address }
     );
     assert.equal(existsA, true);
     assert.equal(existsB, true);

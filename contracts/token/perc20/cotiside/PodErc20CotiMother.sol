@@ -2,7 +2,7 @@
 
 pragma solidity ^0.8.19;
 
-import "@coti-io/coti-contracts/contracts/utils/mpc/MpcCore.sol";
+import "../../../utils/mpc/MpcCore.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
 import "../../../InboxUser.sol";
@@ -22,8 +22,10 @@ contract PodErc20CotiMother is IPodErc20CotiSide, InboxUser, Ownable {
 
     // --- State variables ---
 
-    /// @dev Per-token monotonic nonce included in PoD callbacks.
+    /// @dev Per-token monotonic nonce included in PoD callbacks. Starts at 1 on registration so the first
+    ///      callback satisfies PoD `balanceNonces[account] < nonce` (PoD nonces default to 0).
     mapping(bytes32 => uint256) private _tokenNonce;
+    uint256 private constant INITIAL_TOKEN_NONCE = 1;
     /// @dev Balance ciphertext per token and account.
     mapping(bytes32 => mapping(address => ctUint256)) private _balanceCiphertext;
     /// @dev Allowance ciphertext per token: `owner => spender => ctUint256`.
@@ -180,6 +182,7 @@ contract PodErc20CotiMother is IPodErc20CotiSide, InboxUser, Ownable {
 
         registered[id] = true;
         tokenMeta[id] = TokenMeta(name, symbol, decimals);
+        _tokenNonce[id] = INITIAL_TOKEN_NONCE;
         emit TokenRegistered(sourceChainId, remotePToken, name, symbol, decimals);
     }
 
@@ -200,7 +203,7 @@ contract PodErc20CotiMother is IPodErc20CotiSide, InboxUser, Ownable {
         for (uint256 i = 0; i < count; ++i) {
             address account = accounts[i];
             addresses[i] = account;
-            gtUint256 memory garbledBalance = _readGarbledBalance(id, account);
+            gtUint256 garbledBalance = _readGarbledBalance(id, account);
             ciphertextAmounts[i] = MpcCore.offBoardToUser(garbledBalance, account);
         }
 
@@ -211,8 +214,8 @@ contract PodErc20CotiMother is IPodErc20CotiSide, InboxUser, Ownable {
     }
 
     /// @inheritdoc IPodErc20CotiSide
-    function transfer(address from, address to, gtUint256 calldata value) external override onlyRegisteredPTokenMessage {
-        _moveOrBurn(_activeTokenId(), from, to, _garbledFromCalldata(value), false, false, 0);
+    function transfer(address from, address to, gtUint256 value) external override onlyRegisteredPTokenMessage {
+        _moveOrBurn(_activeTokenId(), from, to, value, false, false, 0);
     }
 
     /// @inheritdoc IPodErc20CotiSide
@@ -224,9 +227,9 @@ contract PodErc20CotiMother is IPodErc20CotiSide, InboxUser, Ownable {
     function transferFrom(
         address from,
         address to,
-        gtUint256 calldata value
+        gtUint256 value
     ) external override onlyRegisteredPTokenMessage {
-        _moveOrBurn(_activeTokenId(), from, to, _garbledFromCalldata(value), false, false, 0);
+        _moveOrBurn(_activeTokenId(), from, to, value, false, false, 0);
     }
 
     /// @inheritdoc IPodErc20CotiSide
@@ -243,10 +246,10 @@ contract PodErc20CotiMother is IPodErc20CotiSide, InboxUser, Ownable {
         address spender,
         address from,
         address to,
-        gtUint256 calldata value
+        gtUint256 value
     ) external override onlyRegisteredPTokenMessage {
         _moveWithOptionalAllowance(
-            _activeTokenId(), spender, from, to, _garbledFromCalldata(value), true, false, false, 0
+            _activeTokenId(), spender, from, to, value, true, false, false, 0
         );
     }
 
@@ -266,9 +269,9 @@ contract PodErc20CotiMother is IPodErc20CotiSide, InboxUser, Ownable {
     function approve(
         address owner,
         address spender,
-        gtUint256 calldata value
+        gtUint256 value
     ) external override onlyRegisteredPTokenMessage {
-        _approveInternal(_activeTokenId(), owner, spender, _garbledFromCalldata(value), false, 0);
+        _approveInternal(_activeTokenId(), owner, spender, value, false, 0);
     }
 
     /// @inheritdoc IPodErc20CotiSide
@@ -281,8 +284,8 @@ contract PodErc20CotiMother is IPodErc20CotiSide, InboxUser, Ownable {
     }
 
     /// @inheritdoc IPodErc20CotiSide
-    function burn(address from, gtUint256 calldata value) external override onlyRegisteredPTokenMessage {
-        _moveOrBurn(_activeTokenId(), from, address(0), _garbledFromCalldata(value), true, false, 0);
+    function burn(address from, gtUint256 value) external override onlyRegisteredPTokenMessage {
+        _moveOrBurn(_activeTokenId(), from, address(0), value, true, false, 0);
     }
 
     /// @inheritdoc IPodErc20CotiSide
@@ -291,8 +294,8 @@ contract PodErc20CotiMother is IPodErc20CotiSide, InboxUser, Ownable {
     }
 
     /// @inheritdoc IPodErc20CotiSide
-    function mint(address to, gtUint256 calldata value) external override onlyRegisteredPTokenMessage {
-        _mintInternal(_activeTokenId(), to, _garbledFromCalldata(value), false, 0);
+    function mint(address to, gtUint256 value) external override onlyRegisteredPTokenMessage {
+        _mintInternal(_activeTokenId(), to, value, false, 0);
     }
 
     /// @inheritdoc IPodErc20CotiSide
@@ -317,20 +320,15 @@ contract PodErc20CotiMother is IPodErc20CotiSide, InboxUser, Ownable {
 
     // --- Private: garbled balance helpers ---
 
-    function _garbledFromCalldata(gtUint256 calldata value) private pure returns (gtUint256 memory garbled) {
-        garbled = value;
-    }
-
     function _ciphertextPlainZero() private returns (ctUint256 memory) {
         return MpcCore.offBoard(MpcCore.setPublic256(0));
     }
 
     function _isEmptyCtUint256(ctUint256 memory ct) private pure returns (bool) {
-        return ctUint64.unwrap(ct.high.high) == 0 && ctUint64.unwrap(ct.high.low) == 0
-            && ctUint64.unwrap(ct.low.high) == 0 && ctUint64.unwrap(ct.low.low) == 0;
+        return ctUint128.unwrap(ct.ciphertextHigh) == 0 && ctUint128.unwrap(ct.ciphertextLow) == 0;
     }
 
-    function _readGarbledBalance(bytes32 id, address account) private returns (gtUint256 memory) {
+    function _readGarbledBalance(bytes32 id, address account) private returns (gtUint256) {
         ctUint256 memory ct = _balanceCiphertext[id][account];
         if (_isEmptyCtUint256(ct)) {
             return MpcCore.onBoard(_ciphertextPlainZero());
@@ -338,7 +336,7 @@ contract PodErc20CotiMother is IPodErc20CotiSide, InboxUser, Ownable {
         return MpcCore.onBoard(ct);
     }
 
-    function _writeGarbledBalance(bytes32 id, address account, gtUint256 memory newBalance) private {
+    function _writeGarbledBalance(bytes32 id, address account, gtUint256 newBalance) private {
         _balanceCiphertext[id][account] = MpcCore.offBoard(newBalance);
     }
 
@@ -346,7 +344,7 @@ contract PodErc20CotiMother is IPodErc20CotiSide, InboxUser, Ownable {
         bytes32 id,
         address from,
         address to,
-        gtUint256 memory amount,
+        gtUint256 amount,
         bool burning,
         bool amountIsPublic,
         uint256 publicAmount
@@ -359,7 +357,7 @@ contract PodErc20CotiMother is IPodErc20CotiSide, InboxUser, Ownable {
         address spender,
         address from,
         address to,
-        gtUint256 memory amount,
+        gtUint256 amount,
         bool spendAllowance,
         bool burning,
         bool amountIsPublic,
@@ -374,16 +372,16 @@ contract PodErc20CotiMother is IPodErc20CotiSide, InboxUser, Ownable {
             return;
         }
 
-        gtUint256 memory senderBalance = _readGarbledBalance(id, from);
+        gtUint256 senderBalance = _readGarbledBalance(id, from);
 
         if (!MpcCore.decrypt(MpcCore.ge(senderBalance, amount))) {
             _sendTransferFailureToPod(id, from, to, bytes("PodErc20CotiMother: insufficient balance"));
             return;
         }
 
-        gtUint256 memory allowanceAfter;
+        gtUint256 allowanceAfter;
         if (spendAllowance && spender != from) {
-            gtUint256 memory currentAllowance = _readGarbledAllowance(id, from, spender);
+            gtUint256 currentAllowance = _readGarbledAllowance(id, from, spender);
             if (!MpcCore.decrypt(MpcCore.ge(currentAllowance, amount))) {
                 _sendTransferFailureToPod(id, from, to, bytes("PodErc20CotiMother: insufficient allowance"));
                 return;
@@ -391,7 +389,7 @@ contract PodErc20CotiMother is IPodErc20CotiSide, InboxUser, Ownable {
             allowanceAfter = MpcCore.sub(currentAllowance, amount);
         }
 
-        gtUint256 memory senderAfter = MpcCore.sub(senderBalance, amount);
+        gtUint256 senderAfter = MpcCore.sub(senderBalance, amount);
         _writeGarbledBalance(id, from, senderAfter);
         if (spendAllowance && spender != from) {
             _allowanceCiphertext[id][from][spender] = MpcCore.offBoard(allowanceAfter);
@@ -416,8 +414,8 @@ contract PodErc20CotiMother is IPodErc20CotiSide, InboxUser, Ownable {
             return;
         }
 
-        gtUint256 memory recipientBefore = _readGarbledBalance(id, to);
-        gtUint256 memory recipientAfter = MpcCore.add(recipientBefore, amount);
+        gtUint256 recipientBefore = _readGarbledBalance(id, to);
+        gtUint256 recipientAfter = MpcCore.add(recipientBefore, amount);
         _writeGarbledBalance(id, to, recipientAfter);
 
         uint256 transferNonce = _tokenNonce[id];
@@ -428,7 +426,7 @@ contract PodErc20CotiMother is IPodErc20CotiSide, InboxUser, Ownable {
         _tokenNonce[id] = transferNonce + 1;
     }
 
-    function _readGarbledAllowance(bytes32 id, address owner, address spender) private returns (gtUint256 memory) {
+    function _readGarbledAllowance(bytes32 id, address owner, address spender) private returns (gtUint256) {
         ctUint256 memory ct = _allowanceCiphertext[id][owner][spender];
         if (_isEmptyCtUint256(ct)) {
             return MpcCore.onBoard(_ciphertextPlainZero());
@@ -439,9 +437,9 @@ contract PodErc20CotiMother is IPodErc20CotiSide, InboxUser, Ownable {
     function _encodePodTransferCallback(
         address from,
         address to,
-        gtUint256 memory amount,
-        gtUint256 memory senderBalanceAfter,
-        gtUint256 memory recipientBalanceAfter,
+        gtUint256 amount,
+        gtUint256 senderBalanceAfter,
+        gtUint256 recipientBalanceAfter,
         uint256 callbackNonce
     ) private returns (bytes memory) {
         ctUint256 memory senderBalanceCt = MpcCore.offBoardToUser(senderBalanceAfter, from);
@@ -455,7 +453,7 @@ contract PodErc20CotiMother is IPodErc20CotiSide, InboxUser, Ownable {
         bytes32 id,
         address owner,
         address spender,
-        gtUint256 memory garbledAllowance,
+        gtUint256 garbledAllowance,
         bool amountIsPublic,
         uint256 publicAmount
     ) private {
@@ -475,7 +473,7 @@ contract PodErc20CotiMother is IPodErc20CotiSide, InboxUser, Ownable {
     function _mintInternal(
         bytes32 id,
         address to,
-        gtUint256 memory amount,
+        gtUint256 amount,
         bool amountIsPublic,
         uint256 publicAmount
     ) private {
@@ -484,8 +482,8 @@ contract PodErc20CotiMother is IPodErc20CotiSide, InboxUser, Ownable {
             return;
         }
 
-        gtUint256 memory recipientBefore = _readGarbledBalance(id, to);
-        gtUint256 memory recipientAfter = MpcCore.add(recipientBefore, amount);
+        gtUint256 recipientBefore = _readGarbledBalance(id, to);
+        gtUint256 recipientAfter = MpcCore.add(recipientBefore, amount);
         _writeGarbledBalance(id, to, recipientAfter);
 
         ctUint256 memory zeroCiphertext = _ciphertextPlainZero();

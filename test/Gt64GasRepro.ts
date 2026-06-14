@@ -21,11 +21,10 @@ import {
   toEventSelector,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
+import { resolveCotiTestnetPrivateKey, normalizePrivateKey } from "./system/mpc-test-utils.js";
 
 const cotiRpc = process.env.COTI_TESTNET_RPC_URL?.trim();
-const cotiPkRaw =
-  process.env.COTI_TESTNET_PRIVATE_KEY?.trim() || process.env.PRIVATE_KEY?.trim();
-const canRunCoti = Boolean(cotiRpc && cotiPkRaw);
+const canRunCoti = Boolean(cotiRpc);
 
 const deployGasOpt = (() => {
   const raw = process.env.MPC_COTI_CONTRACT_DEPLOY_GAS?.trim();
@@ -57,7 +56,7 @@ function formatWriteError(err: unknown): string {
 
 if (!canRunCoti) {
   test.skip(
-    "Gt64GasRepro (COTI): set COTI_TESTNET_RPC_URL and COTI_TESTNET_PRIVATE_KEY (or PRIVATE_KEY)",
+    "Gt64GasRepro (COTI): set COTI_TESTNET_RPC_URL and a funded COTI testnet private key",
     () => {}
   );
 } else {
@@ -73,7 +72,8 @@ if (!canRunCoti) {
         nativeCurrency: { name: "COTI", symbol: "COTI", decimals: 18 },
         rpcUrls: { default: { http: [cotiRpc!] } },
       });
-      const pkHex = (cotiPkRaw!.startsWith("0x") ? cotiPkRaw : `0x${cotiPkRaw}`) as `0x${string}`;
+      const cotiPk = normalizePrivateKey(await resolveCotiTestnetPrivateKey(cotiRpc!));
+      const pkHex = cotiPk as `0x${string}`;
       const account = privateKeyToAccount(pkHex);
       const transport = http(cotiRpc!);
       const publicClient = createPublicClient({ chain: cotiChain, transport });

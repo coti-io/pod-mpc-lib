@@ -265,6 +265,7 @@ contract PodERC20 is IPodERC20, InboxUser {
     /**
      * @notice Applies post-transfer ciphertext balances and optional `transferAndCall` hook.
      * @dev **Gotcha:** balance updates apply only when `nonce` exceeds {balanceNonces}; replays with old nonces are ignored.
+     *      COTI {PodErc20CotiMother} starts per-token callback nonces at 1 on registration so the first update applies.
      *      **Gotcha:** `to.call(callbackData)` uses all remaining gas; failures emit {RequestCallbackFailed} only.
      */
     function transferCallback(bytes memory data) external onlyInbox {
@@ -332,6 +333,7 @@ contract PodERC20 is IPodERC20, InboxUser {
     /**
      * @notice Applies batched balance ciphertexts from COTI after `syncBalances`.
      * @dev Per-account update only if `nonce` is newer than {balanceNonces}; emits {BalanceSynced} for each update applied.
+     *      COTI callback nonces start at 1 when the pToken namespace is registered on the mother.
      */
     function syncBalancesCallback(bytes memory data) external onlyInbox {
         (uint256 remoteChainId, address remoteContract) = inbox.inboxMsgSender();

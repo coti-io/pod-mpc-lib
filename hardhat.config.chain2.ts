@@ -1,8 +1,7 @@
-import path from "node:path";
 import hardhatToolboxViemPlugin from "@nomicfoundation/hardhat-toolbox-viem";
 import { defineConfig } from "hardhat/config";
 export default defineConfig({
   plugins: [hardhatToolboxViemPlugin],
-  solidity: { version: "0.8.28", path: path.resolve("node_modules/solc/soljson.js") },
+  solidity: { version: "0.8.28", preferWasm: false },
   networks: { hardhat: { type: "edr-simulated", chainId: 31338 } },
 });

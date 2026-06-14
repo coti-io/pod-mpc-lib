@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.19;
 
-import "@coti-io/coti-contracts/contracts/utils/mpc/MpcCore.sol";
+import "../utils/mpc/MpcCore.sol";
 
 import "../mpccodec/MpcAbiCodec.sol";
 
@@ -94,7 +94,7 @@ contract MpcAbiCodecHarness {
         uint256[] calldata stringCts,
         bytes[] calldata stringSigs
     ) external returns (bytes memory) {
-        require(values.length == 11, "MpcAbiCodecHarness: invalid values");
+        require(values.length == 8, "MpcAbiCodecHarness: invalid values");
 
         MpcAbiCodec.MpcMethodCallContext memory ctx = MpcAbiCodec.create(selector, 8);
         {
@@ -119,18 +119,18 @@ contract MpcAbiCodecHarness {
         }
         {
             itUint128 memory itU128 = itUint128({
-                ciphertext: ctUint128({high: ctUint64.wrap(values[5]), low: ctUint64.wrap(values[6])}),
-                signature: [bytes(""), bytes("")]
+                ciphertext: ctUint128.wrap(values[5]),
+                signature: ""
             });
             ctx = ctx.addArgument(itU128);
         }
         {
             itUint256 memory itU256 = itUint256({
                 ciphertext: ctUint256({
-                    high: ctUint128({high: ctUint64.wrap(values[7]), low: ctUint64.wrap(values[8])}),
-                    low: ctUint128({high: ctUint64.wrap(values[9]), low: ctUint64.wrap(values[10])})
+                    ciphertextHigh: ctUint128.wrap(values[6]),
+                    ciphertextLow: ctUint128.wrap(values[7])
                 }),
-                signature: [[bytes(""), bytes("")], [bytes(""), bytes("")]]
+                signature: ""
             });
             ctx = ctx.addArgument(itU256);
         }

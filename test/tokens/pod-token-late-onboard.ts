@@ -16,7 +16,7 @@ import {
   normalizePrivateKey,
   onboardUser,
   podTwoWayWriteOptions,
-  requirePrivateKey,
+  resolveCotiTestnetPrivateKey,
 } from "../system/mpc-test-utils.js";
 import {
   completePodOpRoundTrip,
@@ -58,7 +58,7 @@ d("PodERC20 late onboard (non-onboarded recipient/spender)", { concurrency: 1 },
     if (process.env.COTI_REUSE_CONTRACTS === undefined) {
       process.env.COTI_REUSE_CONTRACTS = "false";
     }
-    const cotiPk = normalizePrivateKey(requirePrivateKey("COTI_TESTNET_PRIVATE_KEY"));
+    const cotiPk = normalizePrivateKey(await resolveCotiTestnetPrivateKey());
     lo("before: deploy stack + fund Charlie on COTI without onboarding");
     ctx = await setupPodTokenTestContext({ sepoliaViem, cotiViem });
     await syncPodBalancesRoundTrip(ctx, [ctx.owner], "seedOwnerZero");
