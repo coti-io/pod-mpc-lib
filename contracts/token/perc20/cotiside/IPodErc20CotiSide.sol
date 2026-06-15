@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-import "@coti-io/coti-contracts/contracts/utils/mpc/MpcCore.sol";
+import "../../../utils/mpc/MpcCore.sol";
 
 /**
  * @title IPodErc20CotiSide
@@ -20,7 +20,7 @@ interface IPodErc20CotiSide {
     /**
      * @notice Inbox-only mint with garbled `value`; responds with a {PodERC20.transferCallback}-shaped tuple so PoD updates `to`'s ciphertext.
      */
-    function mint(address to, gtUint256 calldata value) external;
+    function mint(address to, gtUint256 value) external;
 
     /**
      * @notice Inbox-only mint using a plain `amount`; COTI garbles via `MpcCore.setPublic256` and responds as in {mint}.
@@ -37,7 +37,7 @@ interface IPodErc20CotiSide {
      * @notice Moves `value` garbled tokens from `from` to `to` if balance suffices, then `respond`s with the PoD transfer tuple.
      * @dev **Gotcha:** locks on PoD are tracked separately; this function assumes the inbox message is well-formed.
      */
-    function transfer(address from, address to, gtUint256 calldata value) external;
+    function transfer(address from, address to, gtUint256 value) external;
 
     /**
      * @notice Plain-amount variant of {transfer}; COTI garbles via `MpcCore.setPublic256`.
@@ -48,7 +48,7 @@ interface IPodErc20CotiSide {
      * @notice Legacy same MPC move as {transfer}; kept for compatibility with older PoD tokens.
      * @dev New allowance-based integrations should use {transferFromAsSpender}.
      */
-    function transferFrom(address from, address to, gtUint256 calldata value) external;
+    function transferFrom(address from, address to, gtUint256 value) external;
 
     /**
      * @notice Legacy plain-amount variant of {transferFrom}; kept for compatibility with older PoD tokens.
@@ -58,7 +58,7 @@ interface IPodErc20CotiSide {
     /**
      * @notice Spender-aware transferFrom that consumes allowance on COTI before moving garbled `value`.
      */
-    function transferFromAsSpender(address spender, address from, address to, gtUint256 calldata value) external;
+    function transferFromAsSpender(address spender, address from, address to, gtUint256 value) external;
 
     /**
      * @notice Plain-amount variant of {transferFromAsSpender}.
@@ -69,7 +69,7 @@ interface IPodErc20CotiSide {
      * @notice Sets garbled allowance and `respond`s with owner- and spender-specific ciphertext of the same allowance amount.
      * @dev On invalid addresses the implementation should `raise` rather than revert if you need PoD `approveError` symmetry.
      */
-    function approve(address owner, address spender, gtUint256 calldata value) external;
+    function approve(address owner, address spender, gtUint256 value) external;
 
     /**
      * @notice Plain-amount variant of {approve}; COTI garbles via `MpcCore.setPublic256`.
@@ -79,7 +79,7 @@ interface IPodErc20CotiSide {
     /**
      * @notice Subtracts `value` from `from` and responds with a burn-shaped tuple (`to == 0`, zero ciphertexts for receiver side).
      */
-    function burn(address from, gtUint256 calldata value) external;
+    function burn(address from, gtUint256 value) external;
 
     /**
      * @notice Plain-amount variant of {burn}; COTI garbles via `MpcCore.setPublic256`.

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.19;
 
-import "@coti-io/coti-contracts/contracts/utils/mpc/MpcCore.sol";
+import "../../utils/mpc/MpcCore.sol";
 
 import "./MpcExecutorCotiProxyInbox.sol";
 import "./MpcExecutor.sol";
@@ -39,13 +39,13 @@ contract MpcExecutorCotiTest {
 
     function executorMul128PublicPlain(uint128 a, uint128 b, address cOwner) external {
         inboxContract.forwardMul128FromPlain(a, b, cOwner);
-        ctUint128 memory uc = abi.decode(inboxContract.lastRespondData(), (ctUint128));
+        ctUint128 uc = abi.decode(inboxContract.lastRespondData(), (ctUint128));
         lastPlain128 = MpcCore.decrypt(MpcCore.onBoard(uc));
     }
 
     function executorMulWrapping128PublicPlain(uint128 a, uint128 b, address cOwner) external {
         inboxContract.forwardMulWrapping128FromPlain(a, b, cOwner);
-        ctUint128 memory uc = abi.decode(inboxContract.lastRespondData(), (ctUint128));
+        ctUint128 uc = abi.decode(inboxContract.lastRespondData(), (ctUint128));
         lastPlain128 = MpcCore.decrypt(MpcCore.onBoard(uc));
     }
 
@@ -64,33 +64,33 @@ contract MpcExecutorCotiTest {
     // --- Direct `MpcCore` paths (same math, no `respond` / `offBoardCombined`) ---
 
     function mul256PublicPlain(uint256 a, uint256 b) external returns (uint256 r) {
-        gtUint256 memory ga = MpcCore.setPublic256(a);
-        gtUint256 memory gb = MpcCore.setPublic256(b);
-        gtUint256 memory gr = MpcCore.mul(ga, gb);
+        gtUint256 ga = MpcCore.setPublic256(a);
+        gtUint256 gb = MpcCore.setPublic256(b);
+        gtUint256 gr = MpcCore.mul(ga, gb);
         r = MpcCore.decrypt(gr);
         lastPlain256 = r;
     }
 
     function checkedMul256PublicPlain(uint256 a, uint256 b) external returns (uint256 r) {
-        gtUint256 memory ga = MpcCore.setPublic256(a);
-        gtUint256 memory gb = MpcCore.setPublic256(b);
-        gtUint256 memory gr = MpcCore.checkedMul(ga, gb);
+        gtUint256 ga = MpcCore.setPublic256(a);
+        gtUint256 gb = MpcCore.setPublic256(b);
+        gtUint256 gr = MpcCore.checkedMul(ga, gb);
         r = MpcCore.decrypt(gr);
         lastPlain256 = r;
     }
 
     function mul128PublicPlain(uint128 a, uint128 b) external returns (uint128 r) {
-        gtUint128 memory ga = MpcCore.setPublic128(a);
-        gtUint128 memory gb = MpcCore.setPublic128(b);
-        gtUint128 memory gr = MpcCore.checkedMul(ga, gb);
+        gtUint128 ga = MpcCore.setPublic128(a);
+        gtUint128 gb = MpcCore.setPublic128(b);
+        gtUint128 gr = MpcCore.checkedMul(ga, gb);
         r = MpcCore.decrypt(gr);
         lastPlain128 = r;
     }
 
     function mulWrapping128PublicPlain(uint128 a, uint128 b) external returns (uint128 r) {
-        gtUint128 memory ga = MpcCore.setPublic128(a);
-        gtUint128 memory gb = MpcCore.setPublic128(b);
-        gtUint128 memory gr = MpcCore.mul(ga, gb);
+        gtUint128 ga = MpcCore.setPublic128(a);
+        gtUint128 gb = MpcCore.setPublic128(b);
+        gtUint128 gr = MpcCore.mul(ga, gb);
         r = MpcCore.decrypt(gr);
         lastPlain128 = r;
     }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-import "@coti-io/coti-contracts/contracts/utils/mpc/MpcCore.sol";
+import "../../utils/mpc/MpcCore.sol";
 
 /// @title IPodERC20
 /// @notice Async private ERC-20: `ctUint256` balances/allowances; moves use `itUint256` and inbox + COTI settlement.

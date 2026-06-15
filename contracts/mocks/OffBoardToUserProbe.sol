@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-import "@coti-io/coti-contracts/contracts/utils/mpc/MpcCore.sol";
+import "../utils/mpc/MpcCore.sol";
 
 /// @notice COTI-side probe for comparing `offBoard` vs `offBoardToUser` across addresses.
 /// MPC precompile calls must run in a transaction; results are stored for view reads.

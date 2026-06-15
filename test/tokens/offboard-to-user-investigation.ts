@@ -20,7 +20,7 @@ import {
   normalizePrivateKey,
   onboardUser,
   receiptWaitOptions,
-  requirePrivateKey,
+  resolveCotiTestnetPrivateKey,
 } from "../system/mpc-test-utils.js";
 import { derivePrivateKeyVariant, fundCotiNativeAccount } from "./test-token-utils.js";
 
@@ -44,18 +44,18 @@ type CtSample = {
 
 function ctFingerprint(ct: unknown): string {
   const parts = decodeCtUint256(ct);
-  return [parts.highHigh, parts.highLow, parts.lowHigh, parts.lowLow].map((p) => p.toString()).join(",");
+  return [parts.ciphertextHigh, parts.ciphertextLow].map((p) => p.toString()).join(",");
 }
 
 function isAllZeroLimbs(ct: unknown): boolean {
   const parts = decodeCtUint256(ct);
-  return parts.highHigh === 0n && parts.highLow === 0n && parts.lowHigh === 0n && parts.lowLow === 0n;
+  return parts.ciphertextHigh === 0n && parts.ciphertextLow === 0n;
 }
 
 function tryDecrypt(ct: unknown, userKey: string | undefined): string {
   if (!userKey) return "skipped (no AES key)";
   try {
-    const value = decryptUint256(ct, userKey, decryptUint);
+    const value = decryptUint256(ct, userKey);
     return `ok → ${value}`;
   } catch (e) {
     return `error: ${e instanceof Error ? e.message : String(e)}`;
@@ -76,25 +76,25 @@ function formatMarkdown(samples: CtSample[], extras: Record<string, string>): st
     "",
     "## What is a fingerprint?",
     "",
-    "A **fingerprint** is a compact string representation of a COTI `ctUint256` ciphertext. It is **not** a cryptographic hash — it does not hide the value. It is simply the four uint64 limbs of the ciphertext, joined with commas:",
+    "A **fingerprint** is a compact string representation of a COTI `ctUint256` ciphertext. It is **not** a cryptographic hash — it does not hide the value. It is the two uint128 limbs (`ciphertextHigh`, `ciphertextLow`), joined with a comma:",
     "",
     "```text",
-    "highHigh,highLow,lowHigh,lowLow",
+    "ciphertextHigh,ciphertextLow",
     "```",
     "",
-    "`ctUint256` on COTI is stored as four 64-bit chunks. The investigation decodes each sample with `decodeCtUint256` and formats those limbs as decimal strings (see `ctFingerprint` in `test/tokens/offboard-to-user-investigation.ts`).",
+    "`ctUint256` on COTI is stored as two 128-bit chunks. The investigation decodes each sample with `decodeCtUint256` and formats those limbs as decimal strings (see `ctFingerprint` in `test/tokens/offboard-to-user-investigation.ts`).",
     "",
     "Fingerprints let us compare ciphertexts **without decrypting**:",
     "",
     "| Question | How to check |",
     "|----------|--------------|",
     "| Are two ciphertexts identical? | Fingerprints match exactly |",
-    "| Is the ct uninitialized / all-zero? | Separate **all-zero limbs** column (`highHigh` … `lowLow` all `0`) |",
+    "| Is the ct uninitialized / all-zero? | Separate **all-zero limbs** column (`ciphertextHigh` and `ciphertextLow` both `0`) |",
     "| Does onboard change the blob? | Pre vs post fingerprint differs, even when plaintext is the same |",
     "",
     "## Samples",
     "",
-    "| Label | Address | Onboarded? | All-zero limbs? | Decrypt attempt | Fingerprint (4×uint64 limbs) |",
+    "| Label | Address | Onboarded? | All-zero limbs? | Decrypt attempt | Fingerprint (2×uint128 limbs) |",
     "|-------|---------|--------------|-----------------|-----------------|------------------------------|",
   ];
   for (const s of samples) {
@@ -136,7 +136,7 @@ d("offBoardToUser investigation (COTI testnet)", { concurrency: 1 }, async funct
     rpcUrls: { default: { http: [cotiRpcUrl] } },
   });
 
-  const cotiPk = normalizePrivateKey(requirePrivateKey("COTI_TESTNET_PRIVATE_KEY"));
+  const cotiPk = normalizePrivateKey(await resolveCotiTestnetPrivateKey(cotiRpcUrl));
   const deployer = privateKeyToAccount(cotiPk as `0x${string}`).address;
 
   const { viem: cotiViem } = await network.connect({ network: "cotiTestnet" });

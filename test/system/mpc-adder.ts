@@ -24,9 +24,7 @@ import {
   type TestContext,
 } from "./mpc-test-utils.js";
 
-function _it(a,b) {}
-
-describe("MpcAdder (system)", async function () {
+describe("MpcAdder (system)", { concurrency: 1 }, async function () {
   const { viem: sepoliaViem } = await network.connect({ network: "hardhat" });
   const { viem: cotiViem } = await network.connect({ network: "cotiTestnet" });
 
@@ -37,12 +35,11 @@ describe("MpcAdder (system)", async function () {
   });
 
   before(async function () {
-    // Reuse COTI deployments to avoid repeated testnet onboarding/deploys.
     process.env.COTI_REUSE_CONTRACTS = "true";
     ctx = await setupContext({ sepoliaViem, cotiViem });
   });
 
-  _it("Should create an outgoing MPC request from Sepolia", async function () {
+  it("Should create an outgoing MPC request from Sepolia", async function () {
     const a = 12n;
     const b = 30n;
 
@@ -86,7 +83,7 @@ describe("MpcAdder (system)", async function () {
     );
     const encodedOwner = encodeAbiParameters(
       [{ type: "address" }],
-      [ctx.sepolia.wallet.account.address]
+      [ctx.coti.wallet.account.address]
     );
     const expectedArgsData = `0x${encodedA.slice(2)}${encodedB.slice(2)}${encodedOwner.slice(2)}`;
 
@@ -103,13 +100,12 @@ describe("MpcAdder (system)", async function () {
     assert.equal(request.callbackSelector, toFunctionSelector("receiveC(bytes)"));
     assert.equal(request.errorSelector, toFunctionSelector("onDefaultMpcError(bytes32)"));
 
-    // Keep mined nonces contiguous across tests by processing the request.
     const { requestIdUsed: cotiRequestId } = await mineRequest(ctx, "coti", BigInt(ctx.chainIds.sepolia), request, "Test1");
     const responseRequest = await getResponseRequestBySource(ctx.contracts.inboxCoti, cotiRequestId, "Test1");
     await mineRequest(ctx, "sepolia", ctx.chainIds.coti, responseRequest, "Test1");
   });
 
-  _it("Should execute the MPC request on COTI and create a response", async function () {
+  it("Should execute the MPC request on COTI and create a response", async function () {
     const a = 7n;
     const b = 9n;
 
@@ -185,7 +181,6 @@ describe("MpcAdder (system)", async function () {
     const itA = await buildEncryptedInput(ctx, a);
     const itB = await buildEncryptedInput(ctx, b);
     logStep("Test3: sending add()");
-    console.log("ctx.podTwoWayFees.callbackFeeWei", ctx.podTwoWayFees);
     const txHash = await ctx.contracts.mpcAdderAsCoti.write.add(
       [itA, itB, ctx.podTwoWayFees.callbackFeeWei],
       podTwoWayWriteOptions(ctx.podTwoWayFees)
@@ -214,4 +209,3 @@ describe("MpcAdder (system)", async function () {
     assert.equal(decrypted, a + b);
   });
 });
-

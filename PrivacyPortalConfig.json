@@ -3,10 +3,10 @@
     "sepolia": {
       "chainId": 11155111,
       "privacyPortal": {
-        "factory": "0xa7bfadc82f15f29733eb6c21c9a391cc7926929b",
-        "portalImplementation": "0x2f9cb1c73818eaa2991d27fd073b242bed866a6c",
-        "podTokenImplementation": "0xbf615045803edb0dbb2c9b9afedcd782c383a09b",
-        "inbox": "0xd0d7d663217fc531504b930d810995118768fa37",
+        "factory": "",
+        "portalImplementation": "",
+        "podTokenImplementation": "",
+        "inbox": "",
         "cotiNetwork": "cotiTestnet",
         "cotiChainId": 7082400,
         "cotiMother": ""
@@ -17,17 +17,17 @@
           "name": "Private MyTestToken",
           "symbol": "pMTT",
           "decimals": 18,
-          "privacyPortal": "0xF5Da19E1c8FB39Fdd11bB029882fc69E86650beB",
-          "pToken": "0xb681D264a250715977450212d370b05d98761422"
+          "privacyPortal": "",
+          "pToken": ""
         }
       ]
     },
     "avalancheFuji": {
       "chainId": 43113,
       "privacyPortal": {
-        "factory": "0x862e0f72266e6a06719c7118eef1ff289aeb0100",
-        "portalImplementation": "0x36348244cd243ceda5dea46303ffcd26ecd40102",
-        "podTokenImplementation": "0x18f4945336a94be43221fb3c97411739e4bbe63b",
+        "factory": "",
+        "portalImplementation": "",
+        "podTokenImplementation": "",
         "inbox": "0xB4A53FE02401fDFA8DAc00450dA3FfF8D01502F8",
         "cotiNetwork": "cotiTestnet",
         "cotiChainId": 7082400,
@@ -39,16 +39,16 @@
           "name": "Private MyTestToken",
           "symbol": "pMTT",
           "decimals": 18,
-          "privacyPortal": "0x248DF7c9f68c6d8aEFa88Ec218c53f0E6Da6dC81",
-          "pToken": "0x53a5A16f3BC408CB808B442fA69481386945f5cf"
+          "privacyPortal": "",
+          "pToken": ""
         },
         {
           "erc20": "0xa56ea551d6abd4ff5a94677895117d286bc1f1cf",
           "name": "Private Test USDC",
           "symbol": "p.tUSDC",
           "decimals": 6,
-          "privacyPortal": "0xe81fF0e2c1006B61176A89D9B7F7ba9cba4f3fC7",
-          "pToken": "0x70f584c9be407898dE529F13a6299d64B2D389E7"
+          "privacyPortal": "",
+          "pToken": ""
         }
       ]
     },

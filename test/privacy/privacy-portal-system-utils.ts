@@ -6,7 +6,7 @@ import {
   logStep,
   normalizePrivateKey,
   receiptWaitOptions,
-  requirePrivateKey,
+  resolveCotiTestnetPrivateKey,
   runCrossChainTwoWayRoundTrip,
   setupContext,
   podTwoWayWriteOptions,
@@ -42,7 +42,7 @@ export async function setupPrivacyPortalSystemContext(params: {
 }): Promise<PrivacyPortalSystemContext> {
   const base = await setupContext(params);
 
-  const cotiPk = normalizePrivateKey(requirePrivateKey("COTI_TESTNET_PRIVATE_KEY"));
+  const cotiPk = normalizePrivateKey(await resolveCotiTestnetPrivateKey());
   const cotiAccount = privateKeyToAccount(cotiPk as `0x${string}`);
   const owner = cotiAccount.address;
   const hardhatCotiWallet = await params.sepoliaViem.getWalletClient(owner);

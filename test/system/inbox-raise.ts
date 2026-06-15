@@ -11,6 +11,7 @@ import {
   podTwoWayWriteOptions,
   receiptWaitOptions,
   requirePrivateKey,
+  resolveCotiTestnetPrivateKey,
   runCrossChainTwoWayRoundTrip,
   setupContext,
   type TestContext,
@@ -19,7 +20,7 @@ import {
 /** COTI `batchProcessRequests` gas for nested inbox `raise` (no MPC, but safe headroom). */
 const COTI_MINE_GAS_RAISE_PATH = 30_000_000n;
 
-describe("Inbox raise() → error callback (system)", async function () {
+describe("Inbox raise() → error callback (system)", { concurrency: 1 }, async function () {
   const { viem: sepoliaViem } = await network.connect({ network: "hardhat" });
   const { viem: cotiViem } = await network.connect({ network: "cotiTestnet" });
 
@@ -37,7 +38,7 @@ describe("Inbox raise() → error callback (system)", async function () {
     process.env.COTI_REUSE_CONTRACTS = "false";
     ctx = await setupContext({ sepoliaViem, cotiViem });
 
-    const cotiPk = normalizePrivateKey(requirePrivateKey("COTI_TESTNET_PRIVATE_KEY"));
+    const cotiPk = normalizePrivateKey(await resolveCotiTestnetPrivateKey());
     const cotiAccount = privateKeyToAccount(cotiPk as `0x${string}`);
     const hardhatCotiWallet = await sepoliaViem.getWalletClient(cotiAccount.address);
 

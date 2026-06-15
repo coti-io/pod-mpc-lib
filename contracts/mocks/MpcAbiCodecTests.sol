@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.19;
 
-import "@coti-io/coti-contracts/contracts/utils/mpc/MpcCore.sol";
+import "../utils/mpc/MpcCore.sol";
 
 /// @title MpcAbiCodecTests
 /// @notice Storage contract for MPC codec test callbacks.
@@ -75,8 +75,8 @@ contract MpcAbiCodecTests {
         gtUint16 u16,
         gtUint32 u32,
         gtUint64 u64,
-        gtUint128 calldata u128,
-        gtUint256 calldata u256,
+        gtUint128 u128,
+        gtUint256 u256,
         gtString calldata gs
     ) external {
         lastGtBool = gtBool.unwrap(b);

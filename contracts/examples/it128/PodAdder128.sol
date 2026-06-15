@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.19;
 
-import "@coti-io/coti-contracts/contracts/utils/mpc/MpcCore.sol";
+import "../../utils/mpc/MpcCore.sol";
 
 import "../../mpc/PodLib.sol";
 import "../../mpc/PodLibBase.sol";
@@ -42,7 +42,7 @@ contract PodAdder128 is PodLib {
     }
 
     /// @notice Return the last received ciphertext result.
-    function resultCiphertext() external view returns (ctUint128 memory) {
+    function resultCiphertext() external view returns (ctUint128) {
         return _result;
     }
 }

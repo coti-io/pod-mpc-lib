@@ -21,7 +21,7 @@ import { mineRequest, setupContext256, type TestContext256 } from "./mpc-test-ut
  * share one COTI miner wallet and strict inbox nonce ordering. Run scenarios in one `it` so they
  * execute strictly in order.
  */
-describe("MpcAdder256 (system)", async function () {
+describe("MpcAdder256 (system)", { concurrency: 1 }, async function () {
   const { viem: sepoliaViem } = await network.connect({ network: "hardhat" });
   const { viem: cotiViem } = await network.connect({ network: "cotiTestnet" });
 
@@ -59,7 +59,7 @@ describe("MpcAdder256 (system)", async function () {
       const request = await getLatestRequest(ctx.contracts.inboxSepolia, ctx.chainIds.coti);
 
       const expectedSelector = toFunctionSelector(
-        "add256(((uint256,uint256),(uint256,uint256)),((uint256,uint256),(uint256,uint256)),address)"
+        "add256(uint256,uint256,address)"
       );
 
       logStep("Test1: loaded request from hardhat inbox");

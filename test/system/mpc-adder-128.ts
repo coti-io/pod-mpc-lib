@@ -15,7 +15,7 @@ import {
 } from "./mpc-test-utils.js";
 import { mineRequest, setupContext128, type TestContext128 } from "./mpc-test-utils-128.js";
 
-describe("MpcAdder128 (system)", async function () {
+describe("MpcAdder128 (system)", { concurrency: 1 }, async function () {
   const { viem: sepoliaViem } = await network.connect({ network: "hardhat" });
   const { viem: cotiViem } = await network.connect({ network: "cotiTestnet" });
 
@@ -51,7 +51,7 @@ describe("MpcAdder128 (system)", async function () {
     const request = await getLatestRequest(ctx.contracts.inboxSepolia, ctx.chainIds.coti);
 
     const expectedSelector = toFunctionSelector(
-      "add128((uint256,uint256),(uint256,uint256),address)"
+      "add128(uint256,uint256,address)"
     );
 
     logStep("Test1: loaded request from hardhat inbox");

@@ -1,5 +1,4 @@
 import "dotenv/config";
-import path from "node:path";
 import "@nomicfoundation/hardhat-verify";
 import hardhatToolboxViemPlugin from "@nomicfoundation/hardhat-toolbox-viem";
 import { configVariable, defineConfig } from "hardhat/config";
@@ -14,6 +13,35 @@ const privateKeyForCotiTestnet = () =>
   process.env._PRIVATE_KEY?.trim() ||
   process.env.PRIVATE_KEY?.trim() ||
   configVariable("PRIVATE_KEY");
+
+/** Unique 0x-prefixed keys for Hardhat / COTI test wallets (order preserved). */
+const collectTestPrivateKeys = (): `0x${string}`[] => {
+  const raw = [
+    process.env.PRIVATE_KEY?.trim(),
+    process.env.COTI_TESTNET_PRIVATE_KEY?.trim(),
+    process.env._PRIVATE_KEY?.trim(),
+    process.env.PRIVATE_KEY_ACCOUNT_2?.trim(),
+    process.env.SEPOLIA_PRIVATE_KEY?.trim(),
+  ].filter((k): k is string => !!k);
+  const seen = new Set<string>();
+  const out: `0x${string}`[] = [];
+  for (const key of raw) {
+    const normalized = (key.startsWith("0x") ? key : `0x${key}`).toLowerCase();
+    if (!seen.has(normalized)) {
+      seen.add(normalized);
+      out.push(normalized as `0x${string}`);
+    }
+  }
+  return out;
+};
+
+const hardhatTestAccounts = () =>
+  collectTestPrivateKeys().map((privateKey) => ({
+    privateKey,
+    balance: "100000000000000000000",
+  }));
+
+const cotiTestnetAccounts = () => collectTestPrivateKeys();
 
 export default defineConfig({
   plugins: [hardhatToolboxViemPlugin],
@@ -51,9 +79,10 @@ export default defineConfig({
   },
   solidity: {
     // Must be ≥0.8.20 for @openzeppelin/contracts@5.x (e.g. Ownable).
-    // Keep `package.json` `solc` pinned to this exact version so `node_modules/solc/soljson.js` matches.
+    // Do not set `path` to soljson.js — that forces the WASM compiler, which OOMs on
+    // aarch64 when compiling vendored MpcCore.sol. Let Hardhat download the native
+    // linux-arm64 binary instead (see preferWasm: false).
     version: "0.8.28",
-    path: path.resolve("node_modules/solc/soljson.js"),
     preferWasm: false,
     settings: {
       evmVersion: "paris",
@@ -71,14 +100,7 @@ export default defineConfig({
     hardhat: {
       type: "edr-simulated",
       chainId: parseInt(process.env.HARDHAT_CHAIN_ID || "31337"),
-      accounts: process.env.PRIVATE_KEY
-        ? [
-            {
-              privateKey: process.env.PRIVATE_KEY,
-              balance: "100000000000000000000",
-            },
-          ]
-        : undefined,
+      accounts: hardhatTestAccounts().length > 0 ? hardhatTestAccounts() : undefined,
     },
     hardhatMainnet: {
       type: "edr-simulated",
@@ -99,7 +121,7 @@ export default defineConfig({
       chainType: "l1",
       chainId: 7082400,
       url: envOrConfig("COTI_TESTNET_RPC_URL"),
-      accounts: [privateKeyForCotiTestnet()],
+      accounts: cotiTestnetAccounts(),
     },
     avalancheFuji: {
       type: "http",
