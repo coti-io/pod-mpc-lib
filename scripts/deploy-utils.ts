@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import path from "node:path";
 import { defineChain, parseUnits, zeroAddress, createPublicClient, http, type PublicClient, type WalletClient } from "viem";
 import {
@@ -6,6 +7,21 @@ import {
   type DeployInboxDeterministicResult,
   type InboxArtifact,
 } from "./createx.js";
+
+/** Etherscan requires the full solc commit suffix; Hardhat build-info may omit it. */
+export const patchBuildInfoSolcLongVersion = (longVersion = "0.8.28+commit.7893614a") => {
+  const dir = path.resolve(process.cwd(), "artifacts/build-info");
+  if (!fsSync.existsSync(dir)) return;
+  for (const file of fsSync.readdirSync(dir)) {
+    if (!file.endsWith(".json") || file.endsWith(".output.json")) continue;
+    const p = path.join(dir, file);
+    const json = JSON.parse(fsSync.readFileSync(p, "utf8"));
+    if (json.solcLongVersion === "0.8.28") {
+      json.solcLongVersion = longVersion;
+      fsSync.writeFileSync(p, JSON.stringify(json));
+    }
+  }
+};
 
 /** Await mining so the next `write` does not reuse a nonce still pending on COTI (replacement transaction underpriced). */
 export const waitMined = async (publicClient: unknown, hash: `0x${string}`) => {
