@@ -7,6 +7,7 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 import "../token/perc20/IPodERC20.sol";
+import "../utils/IWrappedNative.sol";
 import "./IPrivacyPortal.sol";
 
 /// @notice Optional external policy hook for pausing new withdrawal requests.
@@ -29,6 +30,8 @@ contract PrivacyPortal is IPrivacyPortal, Ownable, ReentrancyGuard {
     address public pauseController;
     /// @notice Token decimals mirrored from the underlying/pToken pair.
     uint8 public decimals;
+    /// @notice When true, {depositNative} wraps native coin and withdrawals unwrap to native.
+    bool public nativeWrappedUnderlying;
 
     /// @notice Monotonic nonce used to derive withdrawal ids.
     uint256 public withdrawalNonce;
@@ -86,6 +89,10 @@ contract PrivacyPortal is IPrivacyPortal, Ownable, ReentrancyGuard {
     error WithdrawalsPaused();
     /// @notice pToken transfer request has not succeeded yet.
     error PTokenTransferNotSuccessful(bytes32 requestId, IPodERC20.RequestStatus status);
+    /// @notice Portal underlying is not configured for native wrap/unwrap.
+    error NativeWrapDisabled();
+    /// @notice Native transfer to the withdrawal recipient failed.
+    error NativeTransferFailed();
 
     /// @notice Lock implementation instance by assigning a non-zero owner placeholder.
     constructor() Ownable(address(1)) {}
@@ -98,7 +105,8 @@ contract PrivacyPortal is IPrivacyPortal, Ownable, ReentrancyGuard {
         address owner_,
         address underlyingToken_,
         address pToken_,
-        uint8 decimals_
+        uint8 decimals_,
+        bool nativeWrappedUnderlying_
     ) external override {
         if (address(underlyingToken) != address(0)) {
             revert PortalAlreadyInitialized();
@@ -113,6 +121,7 @@ contract PrivacyPortal is IPrivacyPortal, Ownable, ReentrancyGuard {
         underlyingToken = IERC20(underlyingToken_);
         pToken = IPodERC20(pToken_);
         decimals = decimals_;
+        nativeWrappedUnderlying = nativeWrappedUnderlying_;
         pauseController = msg.sender;
         emit PauseControllerUpdated(msg.sender);
     }
@@ -140,6 +149,31 @@ contract PrivacyPortal is IPrivacyPortal, Ownable, ReentrancyGuard {
 
         underlyingToken.safeTransferFrom(msg.sender, address(this), amount);
         requestId = pToken.mint{value: msg.value}(recipient, amount, mintCallbackFee);
+        emit DepositRequested(msg.sender, recipient, amount, requestId);
+    }
+
+    /// @inheritdoc IPrivacyPortal
+    function depositNative(
+        address recipient,
+        uint256 amount,
+        uint256 mintCallbackFee
+    ) external payable override nonReentrant returns (bytes32 requestId) {
+        if (!nativeWrappedUnderlying) {
+            revert NativeWrapDisabled();
+        }
+        if (recipient == address(0)) {
+            revert InvalidAddress();
+        }
+        if (amount == 0) {
+            revert InvalidAmount();
+        }
+        if (msg.value < amount) {
+            revert IncorrectFee(amount, msg.value);
+        }
+        uint256 mintFee = msg.value - amount;
+
+        IWrappedNative(address(underlyingToken)).deposit{value: amount}();
+        requestId = pToken.mint{value: mintFee}(recipient, amount, mintCallbackFee);
         emit DepositRequested(msg.sender, recipient, amount, requestId);
     }
 
@@ -226,7 +260,15 @@ contract PrivacyPortal is IPrivacyPortal, Ownable, ReentrancyGuard {
         }
 
         withdrawal.status = WithdrawalStatus.Released;
-        underlyingToken.safeTransfer(withdrawal.recipient, withdrawal.amount);
+        if (nativeWrappedUnderlying) {
+            IWrappedNative(address(underlyingToken)).withdraw(withdrawal.amount);
+            (bool ok,) = payable(withdrawal.recipient).call{value: withdrawal.amount}("");
+            if (!ok) {
+                revert NativeTransferFailed();
+            }
+        } else {
+            underlyingToken.safeTransfer(withdrawal.recipient, withdrawal.amount);
+        }
         emit WithdrawalReleased(withdrawalId, withdrawal.recipient, withdrawal.amount);
 
         _trySubmitBurn(withdrawalId, withdrawal);

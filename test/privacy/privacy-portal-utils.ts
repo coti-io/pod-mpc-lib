@@ -43,7 +43,7 @@ export async function deployDirectPortalContext(params: {
   const portal = await params.viem.deployContract("PrivacyPortal", [], {
     client: { public: params.publicClient, wallet: params.wallet },
   });
-  await portal.write.initialize([params.owner, underlying.address, pToken.address, 18], {
+  await portal.write.initialize([params.owner, underlying.address, pToken.address, 18, false], {
     account: params.owner,
   });
 
@@ -75,8 +75,57 @@ export async function depositPublicToken(
   });
 }
 
+export async function deployNativePortalContext(params: {
+  viem: any;
+  publicClient: PublicClient;
+  wallet: WalletClient;
+  owner: `0x${string}`;
+}): Promise<PortalTestContext> {
+  const underlying = await params.viem.deployContract("MockWrappedNative", ["Wrapped Ether", "WETH"], {
+    client: { public: params.publicClient, wallet: params.wallet },
+  });
+  const pToken = await params.viem.deployContract("MockPodERC20ForPortal", [], {
+    client: { public: params.publicClient, wallet: params.wallet },
+  });
+  const portal = await params.viem.deployContract("PrivacyPortal", [], {
+    client: { public: params.publicClient, wallet: params.wallet },
+  });
+  await portal.write.initialize([params.owner, underlying.address, pToken.address, 18, true], {
+    account: params.owner,
+  });
+
+  return {
+    viem: params.viem,
+    publicClient: params.publicClient,
+    wallet: params.wallet,
+    owner: params.owner,
+    recipient: RECIPIENT,
+    underlying,
+    pToken,
+    portal,
+  };
+}
+
+export async function depositNativeToken(
+  ctx: PortalTestContext,
+  amount: bigint,
+  params: { recipient?: `0x${string}`; mintFee?: bigint; callbackFee?: bigint } = {}
+) {
+  const mintFee = params.mintFee ?? 1_000n;
+  await ctx.portal.write.depositNative([params.recipient ?? ctx.recipient, amount, params.callbackFee ?? 77n], {
+    ...writeOpts(ctx),
+    value: amount + mintFee,
+  });
+}
+
 export async function seedPortalVault(ctx: PortalTestContext, amount: bigint) {
   await ctx.underlying.write.mint([ctx.portal.address, amount], writeOpts(ctx));
+}
+
+/** Seed a native-wrapped portal vault with ETH-backed WETH (not bare mint). */
+export async function seedNativePortalVault(ctx: PortalTestContext, amount: bigint) {
+  await ctx.underlying.write.deposit({ account: ctx.owner, value: amount });
+  await ctx.underlying.write.transfer([ctx.portal.address, amount], writeOpts(ctx));
 }
 
 export async function requestWithdraw(
@@ -207,7 +256,7 @@ export async function deployFactoryPortalPair(ctx: PortalTestContext) {
   });
 
   await factory.write.createPortal(
-    [underlying.address, "Private SEC", "pSEC", 6, ctx.owner],
+    [underlying.address, "Private SEC", "pSEC", 6, false, ctx.owner],
     { ...writeOpts(ctx), value: 2_500_000_000_000n }
   );
 

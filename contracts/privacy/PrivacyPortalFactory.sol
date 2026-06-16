@@ -117,6 +117,7 @@ contract PrivacyPortalFactory is Ownable {
     /// @param name Source pToken name.
     /// @param symbol Source pToken symbol.
     /// @param decimals Token decimals.
+    /// @param nativeWrappedUnderlying True when underlying is WETH/WAVAX (native wrap deposit + unwrap withdraw).
     /// @param portalOwner Owner assigned to the portal clone.
     /// @return portal Deployed portal clone.
     /// @return pToken Deployed source-chain pToken clone.
@@ -125,6 +126,7 @@ contract PrivacyPortalFactory is Ownable {
         string calldata name,
         string calldata symbol,
         uint8 decimals,
+        bool nativeWrappedUnderlying,
         address portalOwner
     ) external payable onlyDeployer returns (address portal, address pToken) {
         if (underlying == address(0) || portalOwner == address(0)) {
@@ -146,7 +148,7 @@ contract PrivacyPortalFactory is Ownable {
             symbol,
             decimals
         );
-        IPrivacyPortal(portal).initialize(portalOwner, underlying, pToken, decimals);
+        IPrivacyPortal(portal).initialize(portalOwner, underlying, pToken, decimals, nativeWrappedUnderlying);
 
         portalForUnderlying[underlying] = portal;
         pTokenForUnderlying[underlying] = pToken;

@@ -45,19 +45,24 @@
         }
       },
       "mpcAdder": "0x2d10ef38a75357d3f021c48b0d678ac90b2993c3",
-      "portalImplementation": "0x553c213639c2e59aeafa93c2e5fed1dc2fb1d3f3",
-      "podTokenImplementation": "0xb8f0d52c3bb0ef883bfd1537c89daa76c0666132",
-      "privacyPortalFactory": "0xe28509a68000ec781090e39c2b6664136a9ef57c",
+      "portalImplementation": "0x16a176bdf0d1a4385aa45623f105d15464ae13b8",
+      "podTokenImplementation": "0x57d7022dec12fb91fcdfe8d3dcc91775a8546ca1",
+      "privacyPortalFactory": "0x1315f2114e1b8de5f940444fdcb65e81eb4a2bff",
       "privacyPortalTokens": {
         "pMTT": {
           "underlying": "0x328e70e1c52662cd5f19f824fcb8b463d77a6686",
-          "portal": "0x05CA57713e98A250fF7c346AE97A6c132410fF66",
-          "pToken": "0x3d0ED3CEe1b575c5F5E922ED0b119DEebCF4e147"
+          "portal": "0x6843ed6068e2C766E7fd581b35bD1b8a04b6Df91",
+          "pToken": "0xe8D13Ca99247AA5d58cd7F53e712Cc396c90d4Cc"
         },
-        "ptUSDC": {
-          "underlying": "0xa56ea551d6abd4ff5a94677895117d286bc1f1cf",
-          "portal": "0xb5A9bdD051198cE52C21c1bE28378Bb475e313a3",
-          "pToken": "0x35a58aF6507771D3bc8C0D05C0cA489201E83fDf"
+        "pUSDC": {
+          "underlying": "0x5425890298aed601595a70AB815c96711a31Bc65",
+          "portal": "0xe191FdfbA64c99C489D9846f2C0cEa495eA35974",
+          "pToken": "0x0291d4DCE114161bfE692AB31A479AF533630f28"
+        },
+        "pWAVAX": {
+          "underlying": "0xd00ae08403B9bbb9124bB305C09058E32C39A48c",
+          "portal": "0xdaa65aB142Fb148e210103649536FcD29Ed8025f",
+          "pToken": "0x69dF41ebdd5D5e0017c1965bd480843857158324"
         }
       }
     },
@@ -93,14 +98,24 @@
       "inbox": "0xB4A53FE02401fDFA8DAc00450dA3FfF8D01502F8",
       "priceOracle": "0x5230856b5ce21ee5efdd113f8d4849a4b02d3a57",
       "mpcAdder": "0xd0a4c056fafff3c7a4f60f39fd0ac5c89490a907",
-      "portalImplementation": "0xdee60d34b44af39f5bf6e4cd1a3b3ffaf30cc999",
-      "podTokenImplementation": "0x8e9803f9ba0f2b42d21bf4410d29b10bbc8d8ff1",
-      "privacyPortalFactory": "0xb74d83e1c25404faede2735d4513c76015e47be7",
+      "portalImplementation": "0xb06340c020274ef5d92f664070966402a4d27712",
+      "podTokenImplementation": "0x7a834a6749e4e939e4b0f064c69bacaa38081c67",
+      "privacyPortalFactory": "0x90c8cbb3681c6f8cc15c8744a67634799c5a5d27",
       "privacyPortalTokens": {
         "pMTT": {
           "underlying": "0xd3f5c63f4D87D2235b295FbA83351d31d0eD1BeE",
-          "portal": "0xffb8770353AcCF2492F6e75f9B5610CE4af8fe89",
-          "pToken": "0x34727cc7233e6B20aE071Cd16A81027172b6bdbA"
+          "portal": "0x3fA6B89Ad5811D4c3E64A52917374C054F7d8702",
+          "pToken": "0x5D061568C9A4Dac2dAabB9E28C1ABaEd5a4eDC0b"
+        },
+        "pUSDC": {
+          "underlying": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+          "portal": "0x75E7D308b11066d6C5F5d65a94F562ce18a5976C",
+          "pToken": "0x4926c63B42ab17Bb72C6F8b3818A3A947C2aE2f9"
+        },
+        "pWETH": {
+          "underlying": "0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9",
+          "portal": "0xF0b8d0A7bd03157D72c3364BC6d30d8F061DBD44",
+          "pToken": "0x4667DFcbCd354c2719E129A9FcC2Bb3a98456b91"
         }
       },
       "feeConfig": {

@@ -5,10 +5,12 @@ import path from "node:path";
 import readline from "node:readline";
 import { network } from "hardhat";
 import type { Address, PublicClient, WalletClient } from "viem";
+import { encodeFunctionData } from "viem";
 import { buildInboxSalt, precomputeCreate3Address } from "./createx.js";
 import {
   asAddress,
   configureTestnetInboxMinFees,
+  createPublicClientForChain,
   deployAndWireTestnetPriceOracle,
   deployDeterministicInbox,
   ensureMinerRegistered,
@@ -17,13 +19,21 @@ import {
   podConfigureKeepInbox,
   readFeeConfigForChain,
   resolveDeployerAddress,
+  resolveWalletAccount,
   waitMined,
+  COTI_ADMIN_WRITE_GAS,
+  ensureGasFunds,
 } from "./deploy-utils.js";
 import {
   explorerAddressUrl,
   hasOnChainCode,
   isVerifiedOnExplorer,
 } from "./explorer.js";
+import {
+  CIRCLE_USDC_FAUCET,
+  FUJI_AVAX_FAUCET,
+  canonicalUnderlying,
+} from "./privacyPortal/canonical-collateral.js";
 
 const deployConfigPath = path.resolve(process.cwd(), "deployConfig.json");
 
@@ -211,26 +221,34 @@ const isAddr = (v: unknown): v is Address =>
   typeof v === "string" && /^0x[0-9a-fA-F]{40}$/.test(v) && v.toLowerCase() !== ZERO_ADDRESS;
 
 /**
- * Registry of PrivacyPortal test tokens. Static params live here (single source of truth); the
- * per-source-chain underlying ERC20 and deployed clone addresses are recorded in deployConfig
- * (data-driven). Add a token by appending to `PP_TOKENS`.
+ * Registry of PrivacyPortal tokens. Static params live here; deployed portal/pToken
+ * addresses are recorded in deployConfig (data-driven).
  *
- * All source pTokens share one COTI-side mother ledger. deployConfig layout:
+ * All source pTokens share one COTI-side mother ledger:
  *   chains[<coti>].cotiMother
  *   chains[<source>].privacyPortalTokens[key] = { underlying, portal, pToken }
+ *
+ * Native ETH (Sepolia) / AVAX (Fuji): underlying is WETH/WAVAX. Users wrap before
+ * deposit and unwrap after withdraw in the app layer; the portal only sees ERC-20.
  */
+type PpUnderlyingKind = "mock" | "canonical";
+
 type PpToken = {
-  /** deployConfig key under `privacyPortalTokens` and the private pToken identity. */
   key: string;
-  /** Private (pToken) name + symbol minted on each source chain. */
   pName: string;
   pSymbol: string;
-  /** Shared decimals for the underlying collateral and the pToken. */
   decimals: number;
-  /** Public underlying ERC20 name/symbol used when deploying a mock collateral token (testnets). */
-  underlyingName: string;
-  underlyingSymbol: string;
-  /** Source chains this token is wired on; each pairs with its `cotiChainForSource`. */
+  underlyingKind: PpUnderlyingKind;
+  /** Menu label for the underlying setup target. */
+  underlyingLabel: string;
+  /** Mock only: deploy `MockERC20Decimals` with this name/symbol. */
+  underlyingName?: string;
+  underlyingSymbol?: string;
+  /**
+   * Canonical only: key into {@link CANONICAL_UNDERLYING}[chainId], e.g. `USDC`, `WETH`, `WAVAX`.
+   * May differ per source chain (WETH on Sepolia, WAVAX on Fuji).
+   */
+  canonicalKey?: string;
   sources: number[];
 };
 
@@ -248,20 +266,62 @@ const PP_TOKENS: PpToken[] = [
     pName: "Private MyTestToken",
     pSymbol: "pMTT",
     decimals: 18,
+    underlyingKind: "mock",
+    underlyingLabel: "MTT ERC20",
     underlyingName: "MyTestToken",
     underlyingSymbol: "MTT",
     sources: [11155111, 43113],
   },
   {
-    key: "ptUSDC",
-    pName: "Private Test USDC",
-    pSymbol: "p.tUSDC",
+    key: "pUSDC",
+    pName: "Private USDC",
+    pSymbol: "pUSDC",
     decimals: 6,
-    underlyingName: "Test USDC",
-    underlyingSymbol: "tUSDC",
+    underlyingKind: "canonical",
+    underlyingLabel: "USDC",
+    canonicalKey: "USDC",
+    sources: [11155111, 43113],
+  },
+  {
+    key: "pWETH",
+    pName: "Private WETH",
+    pSymbol: "pWETH",
+    decimals: 18,
+    underlyingKind: "canonical",
+    underlyingLabel: "WETH (wrap ETH)",
+    canonicalKey: "WETH",
+    sources: [11155111],
+  },
+  {
+    key: "pWAVAX",
+    pName: "Private WAVAX",
+    pSymbol: "pWAVAX",
+    decimals: 18,
+    underlyingKind: "canonical",
+    underlyingLabel: "WAVAX (wrap AVAX)",
+    canonicalKey: "WAVAX",
     sources: [43113],
   },
 ];
+
+const resolveCanonicalUnderlying = (t: PpToken, chainId: number): Address | undefined => {
+  if (t.underlyingKind !== "canonical" || !t.canonicalKey) return undefined;
+  const addr = canonicalUnderlying(chainId, t.canonicalKey);
+  return addr && isAddr(addr) ? addr : undefined;
+};
+
+const logCanonicalCollateralHints = (t: PpToken, chainId: number, underlying: Address) => {
+  if (t.canonicalKey === "USDC") {
+    console.log(`  ${t.key}: Circle USDC — get test tokens at ${CIRCLE_USDC_FAUCET}`);
+  }
+  if (t.canonicalKey === "WETH") {
+    console.log(`  ${t.key}: deposit via portal.depositNative() — msg.value = amount + mintFee (wraps in-contract)`);
+  }
+  if (t.canonicalKey === "WAVAX") {
+    console.log(`  ${t.key}: deposit via portal.depositNative() — msg.value = amount + mintFee (wraps in-contract)`);
+    console.log(`  ${t.key}: Fuji AVAX gas faucet: ${FUJI_AVAX_FAUCET}`);
+  }
+};
 
 /** COTI chain a given source chain pairs with (mainnet -> COTI mainnet, otherwise COTI testnet). */
 const cotiChainForSource = (sourceChainId: number): number =>
@@ -301,16 +361,25 @@ const buildPpTokenTargets = (): Target[] => {
   for (const t of PP_TOKENS) {
     targets.push({
       id: `ppUnderlying:${t.key}`,
-      label: `${t.underlyingSymbol} ERC20`,
+      label: t.underlyingLabel,
       kind: "action",
       roles: ["source"],
       dependsOn: [],
       status: async (ctx) => {
         if (!t.sources.includes(ctx.chainId)) return { applied: false, detail: "n/a on this chain" };
-        const underlying = readSourceToken(ctx.chainId, t.key).underlying;
-        return isAddr(underlying)
-          ? { applied: true, detail: underlying }
-          : { applied: false, detail: "not deployed (mock)" };
+        const recorded = readSourceToken(ctx.chainId, t.key).underlying;
+        if (isAddr(recorded)) {
+          return { applied: true, detail: recorded };
+        }
+        if (t.underlyingKind === "canonical") {
+          const expected = resolveCanonicalUnderlying(t, ctx.chainId);
+          if (!expected) return { applied: false, detail: `no canonical ${t.canonicalKey} on chain` };
+          const deployed = await hasOnChainCode(ctx.publicClient, expected);
+          return deployed
+            ? { applied: false, detail: `ready ${expected}` }
+            : { applied: false, detail: `${expected} (no code)` };
+        }
+        return { applied: false, detail: "not deployed (mock)" };
       },
       run: async (ctx) => {
         if (!t.sources.includes(ctx.chainId)) {
@@ -321,9 +390,25 @@ const buildPpTokenTargets = (): Target[] => {
           console.log(`  ${t.key} underlying already set: ${existing}`);
           return;
         }
+
+        if (t.underlyingKind === "canonical") {
+          const addr = resolveCanonicalUnderlying(t, ctx.chainId);
+          if (!addr) {
+            throw new Error(`${t.key}: canonical ${t.canonicalKey} not configured for chain ${ctx.chainId}`);
+          }
+          if (!(await hasOnChainCode(ctx.publicClient, addr))) {
+            throw new Error(`${t.key}: no contract code at canonical underlying ${addr}`);
+          }
+          await recordSourceTokenField(ctx.chainId, t.key, "underlying", addr);
+          console.log(`  ${t.key} underlying (${t.canonicalKey}, ${t.decimals}d): ${addr}`);
+          logCanonicalCollateralHints(t, ctx.chainId, addr);
+          console.log(`  Recorded deployConfig.chains.${ctx.chainId}.privacyPortalTokens.${t.key}.underlying`);
+          return;
+        }
+
         const addr = await deploySimple(ctx, "MockERC20Decimals", [
-          t.underlyingName,
-          t.underlyingSymbol,
+          t.underlyingName!,
+          t.underlyingSymbol!,
           t.decimals,
         ]);
         const token = await ctx.viem.getContractAt("MockERC20Decimals", addr, {
@@ -350,12 +435,13 @@ const buildPpTokenTargets = (): Target[] => {
         const entry = readSourceToken(ctx.chainId, t.key);
         const cotiMother = readCotiMother(pairedCotiChainId(ctx));
         if (!isAddr(cotiMother)) return { applied: false, detail: "needs COTI mother" };
-        if (!isAddr(entry.underlying)) return { applied: false, detail: `set ${t.underlyingSymbol} underlying first` };
+        if (!isAddr(entry.underlying)) return { applied: false, detail: `set ${t.underlyingLabel} first` };
         if (!isAddr(entry.portal) || !isAddr(entry.pToken)) {
           return { applied: false, detail: "ready to create" };
         }
+        const cotiPublicClient = createPublicClientForChain(Number(pairedCotiChainId(ctx)));
         const mother = await ctx.viem.getContractAt("PodErc20CotiMother", cotiMother as Address, {
-          client: { public: ctx.publicClient, wallet: ctx.walletClient },
+          client: { public: cotiPublicClient, wallet: ctx.walletClient },
         });
         const registered = await mother.read.isRegistered([BigInt(ctx.chainId), entry.pToken]);
         return registered
@@ -380,7 +466,14 @@ const buildPpTokenTargets = (): Target[] => {
         let pToken = (await factory.read.pTokenForUnderlying([underlying])) as Address;
         if (!isAddr(portal)) {
           const hash = await factory.write.createPortal(
-            [underlying, t.pName, t.pSymbol, t.decimals, factoryOwner(ctx)],
+            [
+              underlying,
+              t.pName,
+              t.pSymbol,
+              t.decimals,
+              t.canonicalKey === "WETH" || t.canonicalKey === "WAVAX",
+              factoryOwner(ctx),
+            ],
             { account: ctx.deployer, value: 1_000_000_000_000_000n }
           );
           await waitMined(ctx.publicClient, hash);
@@ -599,6 +692,19 @@ const TARGETS: Target[] = [
       const mother = await ctx.viem.getContractAt("PodErc20CotiMother", motherAddr as Address, {
         client: { public: ctx.publicClient, wallet: ctx.walletClient },
       });
+      const motherOwner = (await mother.read.owner()) as Address;
+      let canSign = false;
+      let balanceNote = "";
+      try {
+        await resolveWalletAccount(ctx.walletClient, motherOwner);
+        canSign = true;
+        const balance = await ctx.publicClient.getBalance({ address: motherOwner });
+        if (balance < 500_000_000_000_000n) {
+          balanceNote = ` · low COTI balance (${balance} wei)`;
+        }
+      } catch {
+        canSign = false;
+      }
       const missing: string[] = [];
       for (const net of DEPLOY_NETWORKS.filter((n) => n.role === "source")) {
         const factory = chainCfgSync(net.chainId).privacyPortalFactory;
@@ -606,15 +712,27 @@ const TARGETS: Target[] = [
         const allowed = await mother.read.allowedFactories([BigInt(net.chainId), factory]);
         if (!allowed) missing.push(`${net.label}`);
       }
-      return missing.length === 0
-        ? { applied: true, detail: "all factories allowlisted" }
-        : { applied: false, detail: `missing: ${missing.join(", ")}` };
+      if (missing.length === 0) {
+        return { applied: true, detail: "all factories allowlisted" };
+      }
+      if (!canSign) {
+        return {
+          applied: false,
+          detail: `missing: ${missing.join(", ")} · need owner ${motherOwner} in wallet`,
+        };
+      }
+      return { applied: false, detail: `missing: ${missing.join(", ")}${balanceNote}` };
     },
     run: async (ctx) => {
       const motherAddr = asAddress(chainCfgSync(ctx.chainId).cotiMother, "cotiMother");
       const mother = await ctx.viem.getContractAt("PodErc20CotiMother", motherAddr, {
         client: { public: ctx.publicClient, wallet: ctx.walletClient },
       });
+      const motherOwner = (await mother.read.owner()) as Address;
+      const signer = await resolveWalletAccount(ctx.walletClient, motherOwner);
+      if (signer.toLowerCase() !== ctx.deployer.toLowerCase()) {
+        console.log(`  using mother owner ${signer} (deployer ${ctx.deployer} is not owner)`);
+      }
       for (const net of DEPLOY_NETWORKS.filter((n) => n.role === "source")) {
         const factory = chainCfgSync(net.chainId).privacyPortalFactory;
         if (!isAddr(factory)) {
@@ -627,7 +745,18 @@ const TARGETS: Target[] = [
           continue;
         }
         const hash = await mother.write.setAllowedFactory([BigInt(net.chainId), factory, true], {
-          account: ctx.deployer,
+          account: signer,
+          gas: await ensureGasFunds({
+            publicClient: ctx.publicClient,
+            account: signer,
+            to: motherAddr,
+            data: encodeFunctionData({
+              abi: mother.abi,
+              functionName: "setAllowedFactory",
+              args: [BigInt(net.chainId), factory, true],
+            }),
+            label: `mother owner ${signer}`,
+          }),
         });
         await waitMined(ctx.publicClient, hash);
         console.log(`  allowlisted ${net.label} factory=${factory}`);
@@ -755,8 +884,9 @@ const gatherStatuses = async (ctx: DeployCtx, role: Role): Promise<TargetStatus[
       try {
         const { applied, detail } = await target.status!(ctx);
         return { target, deployed: false, applied, detail, blockedBy };
-      } catch {
-        return { target, deployed: false, applied: false, detail: "status error", blockedBy };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { target, deployed: false, applied: false, detail: `status error: ${msg}`, blockedBy };
       }
     })
   );
