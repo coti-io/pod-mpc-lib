@@ -9,11 +9,14 @@ import {
   deployDirectPortalContext,
   deployFactoryPortalPair,
   depositPublicToken,
+  depositNativeToken,
+  deployNativePortalContext,
   expectDepositMintSubmitted,
   expectWithdrawTransferSubmitted,
   fundUserAndApprovePortal,
   markPTokenTransferSuccessful,
   requestWithdraw,
+  seedNativePortalVault,
   seedPortalVault,
   setBurnSubmissionFailure,
   triggerWithdrawalRelease,
@@ -167,5 +170,27 @@ describe("PrivacyPortal", { concurrency: 1 }, async function () {
     await mother.write.setAllowedFactory([31337n, factory.address, true], { account: owner });
     assert.equal(await mother.read.allowedFactories([31337n, factory.address]), true);
     assert.equal((await mother.read.inbox()).toLowerCase(), inbox.address.toLowerCase());
+  });
+
+  it("depositNative wraps native coin and submits a public pToken mint", async function () {
+    const nativeCtx = await deployNativePortalContext({ viem, publicClient, wallet, owner });
+    const mintFee = 1_000n;
+
+    await depositNativeToken(nativeCtx, 250n, { mintFee });
+
+    assert.equal(await nativeCtx.underlying.read.balanceOf([nativeCtx.portal.address]), 250n);
+    await expectDepositMintSubmitted(nativeCtx, { amount: 250n, fee: mintFee });
+  });
+
+  it("native portal unwraps to recipient on withdraw release", async function () {
+    const nativeCtx = await deployNativePortalContext({ viem, publicClient, wallet, owner });
+    await seedNativePortalVault(nativeCtx, 500n);
+    await requestWithdraw(nativeCtx, 300n);
+
+    const recipientEthBefore = await publicClient.getBalance({ address: nativeCtx.recipient });
+    await completePTokenTransferCallback(nativeCtx);
+
+    assert.equal(await nativeCtx.underlying.read.balanceOf([nativeCtx.recipient]), 0n);
+    assert.equal(await publicClient.getBalance({ address: nativeCtx.recipient }), recipientEthBefore + 300n);
   });
 });

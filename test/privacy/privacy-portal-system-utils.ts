@@ -72,7 +72,7 @@ export async function setupPrivacyPortalSystemContext(params: {
     "pTUSD",
   ]);
 
-  await portal.write.initialize([owner, underlying.address, pod.address, 18], {
+  await portal.write.initialize([owner, underlying.address, pod.address, 18, false], {
     account: owner,
   });
 

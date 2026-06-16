@@ -7,8 +7,11 @@ import {
   optionalEnv,
   readDeployConfig,
   resolveDeployerAddress,
+  resolveWalletAccount,
   waitMined,
+  ensureGasFunds,
 } from "../deploy-utils.js";
+import { encodeFunctionData } from "viem";
 
 export type ConnectedNetwork = {
   viem: any;
@@ -124,8 +127,21 @@ export const allowlistFactoryOnMother = async (
   console.log(
     `[privacyPortal] allowlisting factory on mother chain=${params.sourceChainId} factory=${params.factory}...`
   );
+  const motherOwner = (await mother.read.owner()) as `0x${string}`;
+  const signer = await resolveWalletAccount(ctx.walletClient, motherOwner);
   const hash = await mother.write.setAllowedFactory([params.sourceChainId, params.factory, true], {
-    account: ctx.deployer,
+    account: signer,
+    gas: await ensureGasFunds({
+      publicClient: ctx.publicClient,
+      account: signer,
+      to: params.mother,
+      data: encodeFunctionData({
+        abi: mother.abi,
+        functionName: "setAllowedFactory",
+        args: [params.sourceChainId, params.factory, true],
+      }),
+      label: `mother owner ${signer}`,
+    }),
   });
   await waitMined(ctx.publicClient, hash);
   console.log("[privacyPortal] factory allowlisted on mother");
@@ -182,6 +198,7 @@ export const createSourcePortalAndPToken = async (
     name: string;
     symbol: string;
     decimals?: number;
+    nativeWrappedUnderlying?: boolean;
     portalOwner?: `0x${string}`;
     cotiCtx?: ConnectedNetwork;
     cotiMother?: `0x${string}`;
@@ -196,7 +213,7 @@ export const createSourcePortalAndPToken = async (
 
   console.log(`[privacyPortal] creating portal pair underlying=${params.underlying}...`);
   const hash = await factory.write.createPortal(
-    [params.underlying, params.name, params.symbol, decimals, portalOwner],
+    [params.underlying, params.name, params.symbol, decimals, params.nativeWrappedUnderlying ?? false, portalOwner],
     { account: ctx.deployer, value: 2_500_000_000_000n }
   );
   await waitMined(ctx.publicClient, hash);

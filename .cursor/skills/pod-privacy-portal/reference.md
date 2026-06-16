@@ -59,7 +59,10 @@ Use:
 
 Deposit has one pToken request:
 
-- `PrivacyPortal.deposit(recipient, amount, callbackFeeWei)` with `value = totalFeeWei`.
+- ERC20 underlying: `PrivacyPortal.deposit(recipient, amount, mintCallbackFee)` with `value = totalFeeWei`. User must `approve` the portal first.
+- Native-wrapped underlying (WETH/WAVAX portals): `PrivacyPortal.depositNative(recipient, amount, mintCallbackFee)` with `value = amount + totalFeeWei`. No approve or separate wrap tx.
+
+Check `nativeWrappedUnderlying()` on the portal to pick the deposit path.
 
 Withdraw has two pToken requests:
 
@@ -83,6 +86,7 @@ Reads:
 - `underlyingToken() -> address`
 - `pToken() -> address`
 - `decimals() -> uint8`
+- `nativeWrappedUnderlying() -> bool`
 - `withdrawalNonce() -> uint256`
 - `burnDebtAmount() -> uint256`
 - `withdrawals(bytes32 id) -> Withdrawal`
@@ -90,7 +94,10 @@ Reads:
 Writes:
 
 - `deposit(address recipient, uint256 amount, uint256 mintCallbackFee) payable -> bytes32 requestId`
+- `depositNative(address recipient, uint256 amount, uint256 mintCallbackFee) payable -> bytes32 requestId` — only when `nativeWrappedUnderlying`; wraps `amount` via WETH/WAVAX `deposit()`, then mints pTokens.
 - `requestWithdrawWithPermit(address recipient, uint256 amount, uint256 transferFee, uint256 transferCallbackFee, uint256 burnFee, uint256 burnCallbackFee, uint256 permitDeadline, uint8 v, bytes32 r, bytes32 s) payable -> (bytes32 withdrawalId, bytes32 transferRequestId)`
+
+Withdraw release: when `nativeWrappedUnderlying`, the portal calls `underlying.withdraw(amount)` and sends native coin to the recipient; otherwise it transfers the ERC20.
 
 Events:
 

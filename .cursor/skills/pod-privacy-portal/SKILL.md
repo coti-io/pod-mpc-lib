@@ -55,8 +55,9 @@ If a UI project has a newer config, prefer the app-local config over this snapsh
 ## UX Rules
 
 - Show deposit as complete only when the mint callback updates pToken state, not when the deposit transaction is mined.
+- For native ETH/AVAX portals (`nativeWrappedUnderlying == true`), use `depositNative` in one tx — do not ask users to wrap WETH/WAVAX first.
 - Show withdrawal as requested after `requestWithdrawWithPermit` is mined.
-- Show withdrawal as released only after the pToken transfer callback calls the portal and underlying ERC20 is transferred.
+- Show withdrawal as released only after the pToken transfer callback calls the portal and underlying is transferred (ERC20 transfer or native unwrap for WETH/WAVAX portals).
 - If a burn submission fails after release, the user is already paid; show it as an admin/keeper cleanup issue, not a user failure.
 - If no callback arrives for withdrawal, keep it pending until a pToken failure signal appears or backend/indexer marks the request stale/failed.
 

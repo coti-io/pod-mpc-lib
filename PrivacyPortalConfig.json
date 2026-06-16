@@ -19,6 +19,22 @@
           "decimals": 18,
           "privacyPortal": "",
           "pToken": ""
+        },
+        {
+          "erc20": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+          "name": "Private USDC",
+          "symbol": "pUSDC",
+          "decimals": 6,
+          "privacyPortal": "",
+          "pToken": ""
+        },
+        {
+          "erc20": "0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9",
+          "name": "Private WETH",
+          "symbol": "pWETH",
+          "decimals": 18,
+          "privacyPortal": "",
+          "pToken": ""
         }
       ]
     },
@@ -43,10 +59,18 @@
           "pToken": ""
         },
         {
-          "erc20": "0xa56ea551d6abd4ff5a94677895117d286bc1f1cf",
-          "name": "Private Test USDC",
-          "symbol": "p.tUSDC",
+          "erc20": "0x5425890298aed601595a70AB815c96711a31Bc65",
+          "name": "Private USDC",
+          "symbol": "pUSDC",
           "decimals": 6,
+          "privacyPortal": "",
+          "pToken": ""
+        },
+        {
+          "erc20": "0xd00ae08403B9bbb9124bB305C09058E32C39A48c",
+          "name": "Private WAVAX",
+          "symbol": "pWAVAX",
+          "decimals": 18,
           "privacyPortal": "",
           "pToken": ""
         }

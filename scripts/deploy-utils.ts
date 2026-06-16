@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { defineChain, parseUnits, zeroAddress, type PublicClient, type WalletClient } from "viem";
+import { defineChain, parseUnits, zeroAddress, createPublicClient, http, type PublicClient, type WalletClient } from "viem";
 import {
   deployInboxDeterministic as deployInboxViaCreateX,
   type DeployInboxDeterministicResult,
@@ -21,7 +21,43 @@ export const waitMined = async (publicClient: unknown, hash: `0x${string}`) => {
 };
 
 /** Enough gas for `PriceOracle` admin price sets on COTI (large uint256 args can underestimate). */
-const ORACLE_PRICE_WRITE_GAS = 500_000n;
+export const COTI_ADMIN_WRITE_GAS = 500_000n;
+
+/** COTI testnet faucet (Discord bot: `testnet <address>`). */
+export const COTI_TESTNET_FAUCET_HINT =
+  "https://docs.coti.io/coti-documentation/build-on-coti/tools/remix-plugin (Discord faucet: testnet <address>)";
+
+type GasPreflightParams = {
+  publicClient: PublicClient;
+  account: `0x${string}`;
+  to: `0x${string}`;
+  data: `0x${string}`;
+  label?: string;
+};
+
+/**
+ * Fail fast before a COTI write when the signer cannot afford gas.
+ * COTI RPC often reports this as `gas required exceeds allowance (<n>)` where `<n>` ≈ balance / gasPrice.
+ */
+export const ensureGasFunds = async (params: GasPreflightParams): Promise<bigint> => {
+  const gas = await params.publicClient.estimateGas({
+    account: params.account,
+    to: params.to,
+    data: params.data,
+  });
+  const gasPrice = await params.publicClient.getGasPrice();
+  const balance = await params.publicClient.getBalance({ address: params.account });
+  const cost = gas * gasPrice;
+  if (balance < cost) {
+    const who = params.label ?? params.account;
+    throw new Error(
+      `Insufficient native balance for gas on ${who}: ` +
+        `balance=${balance} wei, need≈${cost} wei (${gas} gas × ${gasPrice} gasPrice). ` +
+        `Fund the account on COTI testnet. ${COTI_TESTNET_FAUCET_HINT}`
+    );
+  }
+  return gas + gas / 5n;
+};
 
 /** Args for {PodUser.configure} when the inbox was already set in the constructor (`inbox_ == address(0)` skips inbox). */
 export const podConfigureKeepInbox = (
@@ -226,6 +262,23 @@ export const resolveDeployerAddress = async (walletClient: WalletClient): Promis
   return first;
 };
 
+/** Pick the wallet account that matches `required` (mother owner, factory owner, etc.). */
+export const resolveWalletAccount = async (
+  walletClient: WalletClient,
+  required: `0x${string}`
+): Promise<`0x${string}`> => {
+  if (walletClient.account?.address?.toLowerCase() === required.toLowerCase()) {
+    return walletClient.account.address;
+  }
+  const addresses = await walletClient.getAddresses();
+  const match = addresses.find((a) => a.toLowerCase() === required.toLowerCase());
+  if (match) return match;
+  throw new Error(
+    `Wallet has no private key for ${required}. ` +
+      `Set COTI_TESTNET_PRIVATE_KEY (or PRIVATE_KEY) to the contract owner's key.`
+  );
+};
+
 type DeployOracleParams = {
   viem: any;
   publicClient: unknown;
@@ -240,7 +293,7 @@ type DeployOracleParams = {
 export const deployTestnetPriceOracle = async (params: DeployOracleParams) => {
   const { viem, publicClient, walletClient, chainId } = params;
   const deployer = await resolveDeployerAddress(walletClient);
-  const writeOpts = { account: deployer, gas: ORACLE_PRICE_WRITE_GAS };
+  const writeOpts = { account: deployer, gas: COTI_ADMIN_WRITE_GAS };
   const { localUsd18, remoteUsd18 } = oracleUsdPricesForChain(chainId);
 
   const oracle = await viem.deployContract("PriceOracle", [deployer], {
@@ -430,6 +483,18 @@ const resolveRpcUrl = (chainId: number) => {
     return process.env.RPC_URL;
   }
   return "http://127.0.0.1:8545";
+};
+
+/** Read-only client for a chain other than the one currently connected in deploy-cli. */
+export const createPublicClientForChain = (chainId: number): PublicClient => {
+  const rpcUrl = resolveRpcUrl(chainId);
+  const chain = defineChain({
+    id: chainId,
+    name: `chain-${chainId}`,
+    nativeCurrency: { name: "Native", symbol: "NATIVE", decimals: 18 },
+    rpcUrls: { default: { http: [rpcUrl] }, public: { http: [rpcUrl] } },
+  });
+  return createPublicClient({ chain, transport: http(rpcUrl) });
 };
 
 export const getViemClients = async (

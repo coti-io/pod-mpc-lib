@@ -37,10 +37,20 @@ interface IPrivacyPortal {
 
     /// @notice Initialize a clone portal.
     /// @param owner Owner for admin functions.
-    /// @param underlyingToken Public ERC20 locked and released by this portal.
+    /// @param underlyingToken Public ERC20 locked and released by this portal (WETH/WAVAX when native-wrapped).
     /// @param pToken PoD pToken minted and burned for the underlying token.
     /// @param decimals Token decimals exposed for UI compatibility.
-    function initialize(address owner, address underlyingToken, address pToken, uint8 decimals) external;
+    /// @param nativeWrappedUnderlying When true, use {depositNative} and unwrap withdrawals to native coin.
+    function initialize(
+        address owner,
+        address underlyingToken,
+        address pToken,
+        uint8 decimals,
+        bool nativeWrappedUnderlying
+    ) external;
+
+    /// @notice Whether this portal wraps native coin on deposit and unwraps on withdraw.
+    function nativeWrappedUnderlying() external view returns (bool);
 
     /// @notice Lock public ERC20 and request a private pToken mint.
     /// @param recipient Address receiving private pTokens on successful async mint.
@@ -48,6 +58,19 @@ interface IPrivacyPortal {
     /// @param mintCallbackFee Native fee slice for the mint callback.
     /// @return requestId Async pToken mint request id.
     function deposit(address recipient, uint256 amount, uint256 mintCallbackFee) external payable returns (bytes32 requestId);
+
+    /// @notice Wrap native coin into the underlying WETH/WAVAX, then mint pTokens (single tx).
+    /// @dev Requires {nativeWrappedUnderlying}. `msg.value` must equal `amount + mintFee` where `mintFee` is
+    ///      forwarded to {IPodERC20.mint} (same as {deposit}'s `msg.value`).
+    /// @param recipient Address receiving private pTokens on successful async mint.
+    /// @param amount Native amount to wrap and lock (wei).
+    /// @param mintCallbackFee Native fee slice for the mint callback.
+    /// @return requestId Async pToken mint request id.
+    function depositNative(
+        address recipient,
+        uint256 amount,
+        uint256 mintCallbackFee
+    ) external payable returns (bytes32 requestId);
 
     /// @notice Request withdrawal by permitting and transferring pTokens into portal custody, then releasing after async success.
     /// @dev `amount`, fees, recipient, and permit data are public. The pToken transfer must reach `RequestStatus.Success` before release.
