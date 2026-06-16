@@ -17,6 +17,7 @@ import {
   getViemClients,
   optionalEnv,
   podConfigureKeepInbox,
+  patchBuildInfoSolcLongVersion,
   readFeeConfigForChain,
   resolveDeployerAddress,
   resolveWalletAccount,
@@ -1016,6 +1017,7 @@ const runHardhat = (args: string[]) =>
   });
 
 const verifyContract = async (networkName: string, address: Address, args: string[]) => {
+  patchBuildInfoSolcLongVersion();
   console.log(`Verifying on explorer: ${address}${args.length ? ` args=[${args.join(", ")}]` : ""}`);
   await runHardhat(["verify", "--network", networkName, address, ...args]);
 };
