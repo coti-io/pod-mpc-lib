@@ -43,6 +43,22 @@ PP token targets (per chain): underlying setup → portal factory → COTI mothe
 - **Mock** (pMTT): deploys `MockERC20Decimals` and mints 1M to deployer.
 - **Canonical** (pUSDC, pWETH, pWAVAX): records the official ERC-20 address from `canonical-collateral.ts`.
 
+### Verification flags
+
+By default the CLI verifies each contract on the block explorer right after it deploys.
+
+```bash
+# Deploy without verifying (verify later); the menu header shows "verification: OFF".
+npm run deploy:cli -- --noverify
+
+# Verify every deployed-but-unverified contract on the selected network, then exit.
+npm run deploy:cli -- --verify-all
+```
+
+- `--noverify` skips the post-deploy explorer verification step (deploys still record addresses).
+- `--verify-all` walks all configured contracts for the chosen network, skips ones already verified, verifies the rest, and exits (no interactive menu). Combine with `DEPLOY_CLI_NETWORK=<net>` for non-interactive/CI runs.
+- Env equivalents (handy in CI): `DEPLOY_CLI_NOVERIFY=1`, `DEPLOY_CLI_VERIFY_ALL=1`.
+
 ## Factories
 
 ```bash

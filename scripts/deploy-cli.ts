@@ -6,7 +6,12 @@ import readline from "node:readline";
 import { network } from "hardhat";
 import type { Address, PublicClient, WalletClient } from "viem";
 import { encodeFunctionData } from "viem";
-import { buildInboxSalt, precomputeCreate3Address } from "./createx.js";
+import {
+  INBOX_SALT_LABEL,
+  buildInboxSalt,
+  computeGuardedSalt,
+  precomputeCreate3Address,
+} from "./createx.js";
 import {
   asAddress,
   configureTestnetInboxMinFees,
@@ -38,6 +43,16 @@ import {
 
 const deployConfigPath = path.resolve(process.cwd(), "deployConfig.json");
 
+// --- CLI flags ---
+// Parsed from argv (the `deploy:cli` npm script launches this file directly via tsx, so flags
+// pass straight through to process.argv). Env fallbacks keep scripted/CI use simple.
+//   --noverify    skip explorer verification after a deploy
+//   --verify-all  verify every deployed contract on the connected network, then exit
+const CLI_FLAGS = process.argv.slice(2);
+const truthyEnv = (key: string): boolean => /^(1|true|yes|on)$/i.test(optionalEnv(key) ?? "");
+const NO_VERIFY = CLI_FLAGS.includes("--noverify") || truthyEnv("DEPLOY_CLI_NOVERIFY");
+const VERIFY_ALL = CLI_FLAGS.includes("--verify-all") || truthyEnv("DEPLOY_CLI_VERIFY_ALL");
+
 type Role = "source" | "coti";
 
 /** User-selectable networks (must exist in hardhat.config.ts). */
@@ -56,6 +71,8 @@ type DeployCtx = {
   deployer: Address;
   /** Deterministic CreateX address for the Inbox (known before deploy). */
   inboxAddress: Address;
+  /** Salt label driving the deterministic Inbox address family (from deployConfig or default). */
+  inboxSaltLabel: string;
 };
 
 type Target = {
@@ -103,6 +120,35 @@ const chainEntry = (cfg: any, chainId: number): Record<string, any> => {
 };
 const chainCfgSync = (chainId: number): Record<string, any> =>
   readCfgSync().chains?.[String(chainId)] ?? {};
+
+/** Salt label that drives the deterministic Inbox address family (chain-independent). */
+const readInboxSaltLabel = (cfg: any): string => {
+  const label = cfg?.inboxSalt?.label;
+  return typeof label === "string" && label.length > 0 ? label : INBOX_SALT_LABEL;
+};
+
+/**
+ * Persist the resolved Inbox salt back to `deployConfig.inboxSalt` so the deterministic
+ * inputs are transparent and editable. The 32-byte `salt`/`guardedSalt`/`address` are
+ * deployer-specific; `label` is the deployer-independent knob that selects the address family.
+ */
+const recordInboxSalt = async (params: {
+  label: string;
+  deployer: Address;
+  salt: `0x${string}`;
+  guardedSalt: `0x${string}`;
+  address: Address;
+}): Promise<void> => {
+  const cfg = await readCfg();
+  cfg.inboxSalt = {
+    label: params.label,
+    deployer: params.deployer,
+    salt: params.salt,
+    guardedSalt: params.guardedSalt,
+    address: params.address,
+  };
+  await writeCfg(cfg);
+};
 
 /** Factory owner for PrivacyPortal deployments: `FACTORY_OWNER` env if set, else the deployer. */
 const factoryOwner = (ctx: DeployCtx): Address => {
@@ -513,6 +559,7 @@ const TARGETS: Target[] = [
         viem: ctx.viem,
         publicClient: ctx.publicClient,
         walletClient: ctx.walletClient,
+        saltLabel: ctx.inboxSaltLabel,
       });
       const minerRaw = optionalEnv("MINER_ADDRESS");
       if (minerRaw) {
@@ -1022,6 +1069,28 @@ const verifyContract = async (networkName: string, address: Address, args: strin
   await runHardhat(["verify", "--network", networkName, address, ...args]);
 };
 
+/**
+ * Verify a deployed contract on the explorer unless `--noverify` is set or it's already verified.
+ * Failures are non-fatal (logged) so a deploy run isn't lost to a flaky verifier.
+ */
+const maybeVerify = async (ctx: DeployCtx, target: Target, address: Address): Promise<void> => {
+  if (NO_VERIFY) {
+    console.log(`Skipping verification (--noverify): ${explorerAddressUrl(ctx.chainId, address) ?? address}`);
+    return;
+  }
+  const verified = await isVerifiedOnExplorer(ctx.chainId, address);
+  if (verified === true) {
+    console.log(`Already verified: ${explorerAddressUrl(ctx.chainId, address) ?? address}`);
+    return;
+  }
+  try {
+    await verifyContract(ctx.networkName, address, target.verifyArgs!(ctx));
+    console.log(`Verified: ${explorerAddressUrl(ctx.chainId, address) ?? address}`);
+  } catch (error) {
+    console.warn(`Verification failed (you can retry later):`, error instanceof Error ? error.message : error);
+  }
+};
+
 // --- action: deploy (if needed) + verify (if needed) + persist ---
 
 const runTarget = async (ctx: DeployCtx, s: TargetStatus): Promise<void> => {
@@ -1050,17 +1119,46 @@ const runTarget = async (ctx: DeployCtx, s: TargetStatus): Promise<void> => {
 
   if (!address) return;
 
-  const verified = await isVerifiedOnExplorer(ctx.chainId, address);
-  if (verified === true) {
-    console.log(`Already verified: ${explorerAddressUrl(ctx.chainId, address) ?? address}`);
+  await maybeVerify(ctx, target, address);
+};
+
+/**
+ * `--verify-all`: walk every contract target applicable to the connected network, and verify
+ * any that are deployed on-chain but not yet verified on the explorer. Already-verified
+ * contracts are skipped. Verification failures are reported but don't abort the run.
+ */
+const runVerifyAll = async (ctx: DeployCtx, role: Role): Promise<void> => {
+  console.log(`\n=== Verify-all on ${ctx.networkName} (chainId ${ctx.chainId}) ===`);
+  const statuses = await gatherStatuses(ctx, role);
+  const contracts = statuses.filter((s) => s.target.kind === "contract" && s.deployed && s.address);
+  if (!contracts.length) {
+    console.log("No deployed contracts found to verify.");
     return;
   }
-  try {
-    await verifyContract(ctx.networkName, address, target.verifyArgs!(ctx));
-    console.log(`Verified: ${explorerAddressUrl(ctx.chainId, address) ?? address}`);
-  } catch (error) {
-    console.warn(`Verification failed (you can retry later):`, error instanceof Error ? error.message : error);
+
+  let verified = 0;
+  let skipped = 0;
+  let failed = 0;
+  for (const s of contracts) {
+    const address = s.address!;
+    if (s.verified === true) {
+      console.log(`= ${s.target.label.padEnd(13)} already verified  ${explorerAddressUrl(ctx.chainId, address) ?? address}`);
+      skipped++;
+      continue;
+    }
+    console.log(`\n--- Verifying ${s.target.label} (${address}) ---`);
+    try {
+      await verifyContract(ctx.networkName, address, s.target.verifyArgs!(ctx));
+      console.log(`+ Verified ${s.target.label}: ${explorerAddressUrl(ctx.chainId, address) ?? address}`);
+      verified++;
+    } catch (error) {
+      console.warn(`! Verification failed for ${s.target.label}:`, error instanceof Error ? error.message : error);
+      failed++;
+    }
   }
+  console.log(
+    `\nVerify-all done on ${ctx.networkName}: ${verified} verified, ${skipped} already verified, ${failed} failed (${contracts.length} contracts).`
+  );
 };
 
 const main = async () => {
@@ -1090,7 +1188,17 @@ const main = async () => {
   const { viem, provider, networkName } = connection;
   const { chainId, publicClient, walletClient } = await getViemClients(viem, provider, networkName);
   const deployer = await resolveDeployerAddress(walletClient);
-  const inboxAddress = await precomputeCreate3Address(publicClient, deployer, buildInboxSalt(deployer));
+  const inboxSaltLabel = readInboxSaltLabel(await readCfg());
+  const inboxSalt = buildInboxSalt(deployer, inboxSaltLabel);
+  const inboxAddress = await precomputeCreate3Address(publicClient, deployer, inboxSalt);
+  // Keep deployConfig.inboxSalt in sync with the resolved deterministic inputs.
+  await recordInboxSalt({
+    label: inboxSaltLabel,
+    deployer,
+    salt: inboxSalt,
+    guardedSalt: computeGuardedSalt(deployer, inboxSalt),
+    address: inboxAddress,
+  });
 
   const ctx: DeployCtx = {
     viem,
@@ -1100,7 +1208,14 @@ const main = async () => {
     networkName,
     deployer,
     inboxAddress,
+    inboxSaltLabel,
   };
+
+  // `--verify-all`: verify every deployed-but-unverified contract on this network, then exit.
+  if (VERIFY_ALL) {
+    await runVerifyAll(ctx, net.role);
+    return;
+  }
 
   // Non-interactive batch mode: `DEPLOY_CLI_NETWORK=<net> DEPLOY_CLI_TARGETS=id1,id2 npm run deploy:cli`.
   // Runs the listed target ids in order (re-reading status between each so dependency gating and
@@ -1145,7 +1260,9 @@ const main = async () => {
 
     const title =
       `Deploy menu \u2014 ${net.label} (chainId ${chainId})\n` +
-      `deployer ${deployer} \u00b7 inbox(det) ${inboxAddress}`;
+      `deployer ${deployer} \u00b7 inbox(det) ${inboxAddress}\n` +
+      `inbox salt label "${inboxSaltLabel}"` +
+      (NO_VERIFY ? `\nverification: OFF (--noverify)` : "");
     const choice = await interactiveSelect(title, items);
     if (!choice || choice === "exit") {
       console.log("Done.");

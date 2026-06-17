@@ -412,6 +412,8 @@ export const deployDeterministicInbox = async (params: {
   };
   publicClient: PublicClient;
   walletClient: WalletClient;
+  /** Salt label driving the deterministic address family; defaults to the createx constant. */
+  saltLabel?: string;
 }): Promise<DeployInboxDeterministicResult & { inbox: any; deployer: `0x${string}` }> => {
   const deployer = await resolveDeployerAddress(params.walletClient);
   const artifact = await readInboxArtifact();
@@ -421,6 +423,7 @@ export const deployDeterministicInbox = async (params: {
     deployer,
     chainId: 0n,
     artifact,
+    saltLabel: params.saltLabel,
   });
   const inbox = await params.viem.getContractAt("Inbox", result.address, {
     client: { public: params.publicClient, wallet: params.walletClient },
