@@ -68,8 +68,8 @@ export const CREATEX_ABI = [
  *   into the guarded salt and the resulting address is identical on every chain.
  * - Last 11 bytes = deterministic entropy derived from {INBOX_SALT_LABEL}.
  */
-export const buildInboxSalt = (deployer: Address): Hex => {
-  const labelHash = keccak256(toHex(INBOX_SALT_LABEL));
+export const buildInboxSalt = (deployer: Address, label: string = INBOX_SALT_LABEL): Hex => {
+  const labelHash = keccak256(toHex(label));
   // First 11 bytes (22 hex chars) of the label hash as entropy.
   const entropy = (`0x${labelHash.slice(2, 2 + 22)}`) as Hex;
   const salt = concatHex([getAddress(deployer), "0x00", entropy]) as Hex;
@@ -131,6 +131,8 @@ export type DeployInboxDeterministicParams = {
   chainId: bigint;
   /** Inbox compiled artifact ({ abi, bytecode }). Bytecode must be constructor-arg-free. */
   artifact: InboxArtifact;
+  /** Salt label driving the deterministic address family; defaults to {INBOX_SALT_LABEL}. */
+  saltLabel?: string;
 };
 
 export type DeployInboxDeterministicResult = {
@@ -152,7 +154,7 @@ export type DeployInboxDeterministicResult = {
 export const deployInboxDeterministic = async (
   params: DeployInboxDeterministicParams
 ): Promise<DeployInboxDeterministicResult> => {
-  const { publicClient, walletClient, deployer, chainId, artifact } = params;
+  const { publicClient, walletClient, deployer, chainId, artifact, saltLabel } = params;
 
   if (!(await isCreateXAvailable(publicClient))) {
     throw new Error(
@@ -160,7 +162,7 @@ export const deployInboxDeterministic = async (
     );
   }
 
-  const salt = buildInboxSalt(deployer);
+  const salt = buildInboxSalt(deployer, saltLabel);
   const predictedAddress = await precomputeCreate3Address(publicClient, deployer, salt);
 
   if (await isContractDeployed(publicClient, predictedAddress)) {
