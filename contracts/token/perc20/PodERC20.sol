@@ -7,11 +7,12 @@ import "../../mpccodec/MpcAbiCodec.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "./IPodERC20.sol";
 import "./cotiside/IPodErc20CotiSide.sol";
+import "../erc7984/PodErc7984Mixin.sol";
 
 /// @title PodERC20
 /// @notice PoD-side private ERC-20: ciphertext cache and inbox-mediated async moves; COTI holds authoritative garbled state via {IPodErc20CotiSide}.
 /// @dev Callbacks only from `inbox` when the remote peer matches (`cotiChainId`, `cotiSideContract`). Public-amount methods expose amounts in calldata and logs; use encrypted `itUint256` entry points for privacy-sensitive flows.
-contract PodERC20 is IPodERC20, InboxUser {
+contract PodERC20 is IPodERC20, InboxUser, PodErc7984Mixin {
     using MpcAbiCodec for MpcAbiCodec.MpcMethodCallContext;
 
     // --- State variables ---
@@ -300,6 +301,7 @@ contract PodERC20 is IPodERC20, InboxUser {
         }
         bytes memory callbackData = _requestCallbacks[sourceRequestId];
         emit Transfer(from, to, senderValue, receiverValue);
+        _emitConfidentialTransfer(from, to, senderValue, receiverValue);
         if (callbackData.length != 0) {
             (bool success, ) = address(to).call(callbackData);
             if (success) {
@@ -898,5 +900,11 @@ contract PodERC20 is IPodERC20, InboxUser {
         _setRequestStatus(requestId, IPodERC20.RequestStatus.Pending);
         _pendingTransferRequestIds[to] = requestId;
         emit TransferRequestSubmitted(address(0), to, requestId);
+    }
+
+    // --- ERC-7984 mixin hooks ---
+
+    function _erc7984BalanceOf(address account) internal view override returns (ctUint256 memory) {
+        return _balances[account];
     }
 }

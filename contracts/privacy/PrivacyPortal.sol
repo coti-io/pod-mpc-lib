@@ -7,6 +7,7 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 import "../token/perc20/IPodERC20.sol";
+import "../token/erc7984/IERC7984PortalWrapper.sol";
 import "../utils/IWrappedNative.sol";
 import "./IPrivacyPortal.sol";
 
@@ -19,7 +20,7 @@ interface IPrivacyPortalPauseController {
 /// @title PrivacyPortal
 /// @notice Locks a public ERC20 and mints/burns its PoD private pToken counterpart.
 /// @dev The portal never reads private balances. It only reacts to successful pToken callbacks and records public bridge obligations.
-contract PrivacyPortal is IPrivacyPortal, Ownable, ReentrancyGuard {
+contract PrivacyPortal is IPrivacyPortal, IERC7984PortalWrapper, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     /// @notice Public ERC20 collateral locked by this portal.
@@ -140,6 +141,13 @@ contract PrivacyPortal is IPrivacyPortal, Ownable, ReentrancyGuard {
         uint256 amount,
         uint256 mintCallbackFee
     ) external payable override nonReentrant returns (bytes32 requestId) {
+        return _deposit(recipient, amount, mintCallbackFee);
+    }
+
+    function _deposit(address recipient, uint256 amount, uint256 mintCallbackFee)
+        private
+        returns (bytes32 requestId)
+    {
         if (recipient == address(0)) {
             revert InvalidAddress();
         }
@@ -150,6 +158,7 @@ contract PrivacyPortal is IPrivacyPortal, Ownable, ReentrancyGuard {
         underlyingToken.safeTransferFrom(msg.sender, address(this), amount);
         requestId = pToken.mint{value: msg.value}(recipient, amount, mintCallbackFee);
         emit DepositRequested(msg.sender, recipient, amount, requestId);
+        emit WrapRequested(msg.sender, recipient, amount, requestId);
     }
 
     /// @inheritdoc IPrivacyPortal
@@ -175,6 +184,27 @@ contract PrivacyPortal is IPrivacyPortal, Ownable, ReentrancyGuard {
         IWrappedNative(address(underlyingToken)).deposit{value: amount}();
         requestId = pToken.mint{value: mintFee}(recipient, amount, mintCallbackFee);
         emit DepositRequested(msg.sender, recipient, amount, requestId);
+        emit WrapRequested(msg.sender, recipient, amount, requestId);
+    }
+
+    /// @inheritdoc IERC7984PortalWrapper
+    function underlying() external view returns (address) {
+        return address(underlyingToken);
+    }
+
+    /// @inheritdoc IERC7984PortalWrapper
+    function rate() external pure returns (uint256) {
+        return 1;
+    }
+
+    /// @inheritdoc IERC7984PortalWrapper
+    function wrap(address to, uint256 amount, uint256 mintCallbackFee)
+        external
+        payable
+        nonReentrant
+        returns (bytes32 requestId)
+    {
+        return _deposit(to, amount, mintCallbackFee);
     }
 
     /// @inheritdoc IPrivacyPortal
@@ -228,6 +258,11 @@ contract PrivacyPortal is IPrivacyPortal, Ownable, ReentrancyGuard {
         });
 
         emit WithdrawalRequested(withdrawalId, msg.sender, recipient, amount, transferRequestId);
+        emit UnwrapRequested(
+            recipient,
+            withdrawalId,
+            keccak256(abi.encode(withdrawalId, transferRequestId))
+        );
     }
 
     /// @inheritdoc IPrivacyPortal
@@ -270,6 +305,13 @@ contract PrivacyPortal is IPrivacyPortal, Ownable, ReentrancyGuard {
             underlyingToken.safeTransfer(withdrawal.recipient, withdrawal.amount);
         }
         emit WithdrawalReleased(withdrawalId, withdrawal.recipient, withdrawal.amount);
+        // Explorer correlation id for the confidential leg (not a ciphertext pointer; see pToken ConfidentialTransfer).
+        emit UnwrapFinalized(
+            withdrawal.recipient,
+            withdrawalId,
+            withdrawalId,
+            uint64(withdrawal.amount)
+        );
 
         _trySubmitBurn(withdrawalId, withdrawal);
     }
