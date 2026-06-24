@@ -64,10 +64,11 @@ abstract contract InboxFeeManager {
     /// @param totalFee Stored target fee in gas units.
     /// @return budget Gas units forwarded to the target subcall.
     function _localRequestExecutionBudget(uint256 totalFee) internal view returns (uint256 budget) {
-        if (localMinFeeConfig.constantFee > 0) {
+        FeeConfig memory localMin = localMinFeeConfig;
+        if (localMin.constantFee > 0) {
             return totalFee;
         }
-        uint256 errorBuffer = localMinFeeConfig.errorLength * localMinFeeConfig.gasPerByte;
+        uint256 errorBuffer = localMin.errorLength * localMin.gasPerByte;
         return totalFee > errorBuffer ? totalFee - errorBuffer : 0;
     }
 
@@ -85,8 +86,7 @@ abstract contract InboxFeeManager {
         if (address(priceOracle) == address(0)) {
             revert OracleNotConfigured();
         }
-        localPrice = priceOracle.getLocalTokenPriceUSD();
-        remotePrice = priceOracle.getRemoteTokenPriceUSD();
+        (localPrice, remotePrice) = priceOracle.getPricesUSD();
         if (localPrice == 0 || remotePrice == 0) {
             revert OraclePriceZero();
         }
@@ -141,16 +141,18 @@ abstract contract InboxFeeManager {
         }
 
         (uint256 localPrice, uint256 remotePrice) = _validatedOraclePrices();
+        FeeConfig memory localMin = localMinFeeConfig;
+        FeeConfig memory remoteMin = remoteMinFeeConfig;
         uint256 gasPrice = tx.gasprice != 0 ? tx.gasprice : DEFAULT_GAS_PRICE;
         callerGasLocalUnits = callbackFeeLocalWei / gasPrice;
         uint256 remoteGasWei = totalFeeLocalWei - callbackFeeLocalWei;
         targetGasRemoteUnits = Math.mulDiv(remoteGasWei / gasPrice, localPrice, remotePrice);
 
-        if (callerGasLocalUnits < expectedMinFee(dataSize, localMinFeeConfig)) {
+        if (callerGasLocalUnits < expectedMinFee(dataSize, localMin)) {
             revert CallbackFeeTooLow(callerGasLocalUnits);
         }
 
-        if (targetGasRemoteUnits < expectedMinFee(dataSize, remoteMinFeeConfig)) {
+        if (targetGasRemoteUnits < expectedMinFee(dataSize, remoteMin)) {
             revert TargetFeeTooLow(targetGasRemoteUnits);
         }
     }
@@ -168,9 +170,10 @@ abstract contract InboxFeeManager {
             revert TotalFeeTooLow(totalFeeLocalWei);
         }
         (uint256 localPrice, uint256 remotePrice) = _validatedOraclePrices();
+        FeeConfig memory remoteMin = remoteMinFeeConfig;
         uint256 gasPrice = tx.gasprice != 0 ? tx.gasprice : DEFAULT_GAS_PRICE;
         targetGasRemoteUnits = Math.mulDiv(totalFeeLocalWei / gasPrice, localPrice, remotePrice);
-        if (targetGasRemoteUnits < expectedMinFee(dataSize, remoteMinFeeConfig)) {
+        if (targetGasRemoteUnits < expectedMinFee(dataSize, remoteMin)) {
             revert TargetFeeTooLow(targetGasRemoteUnits);
         }
     }
@@ -204,10 +207,10 @@ abstract contract InboxFeeManager {
         uint256 gasPrice
     ) external view returns (uint256 targetFeeLocalWei, uint256 callerFeeLocalWei) {
         (uint256 localTokenPrice, uint256 remoteTokenPrice) = _validatedOraclePrices();
-        uint256 targetGasRemoteUnits = expectedMinFee(remoteMethodCallSize, remoteMinFeeConfig)
-            + remoteMethodExecutionGas;
-        uint256 callerGasLocalUnits = expectedMinFee(callBackMethodCallSize, localMinFeeConfig)
-            + callBackMethodExecutionGas;
+        FeeConfig memory remoteMin = remoteMinFeeConfig;
+        FeeConfig memory localMin = localMinFeeConfig;
+        uint256 targetGasRemoteUnits = expectedMinFee(remoteMethodCallSize, remoteMin) + remoteMethodExecutionGas;
+        uint256 callerGasLocalUnits = expectedMinFee(callBackMethodCallSize, localMin) + callBackMethodExecutionGas;
         uint256 targetGasLocalUnits = Math.mulDiv(
             targetGasRemoteUnits,
             remoteTokenPrice,

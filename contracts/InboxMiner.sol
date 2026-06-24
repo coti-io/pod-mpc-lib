@@ -43,7 +43,7 @@ contract InboxMiner is InboxBase, MinerBase, IInboxMiner, ReentrancyGuard {
             allowedNonce++;
         }
 
-        for (uint256 i = 0; i < mined.length; i++) {
+        for (uint256 i = 0; i < mined.length;) {
             MinedRequest memory minedRequest = mined[i];
             bytes32 requestId = minedRequest.requestId;
             (uint256 minedChainId, uint256 minedTargetChainId, uint256 minedNonce) = _unpackRequestId(requestId);
@@ -54,7 +54,9 @@ contract InboxMiner is InboxBase, MinerBase, IInboxMiner, ReentrancyGuard {
                 revert RequestTargetChainMismatch(requestId, chainId, minedTargetChainId);
             }
             require(minedNonce == allowedNonce, "Inbox: mined nonces must be contiguous");
-            allowedNonce++;
+            unchecked {
+                ++allowedNonce;
+            }
             Request storage incomingRequest = incomingRequests[requestId];
             require(incomingRequest.requestId == bytes32(0), "Inbox: request already processed");
             require(minedRequest.sourceContract != address(0), "Inbox: invalid source contract");
@@ -78,7 +80,6 @@ contract InboxMiner is InboxBase, MinerBase, IInboxMiner, ReentrancyGuard {
             });
 
             incomingRequests[requestId] = newIncomingRequest;
-            incomingRequest = incomingRequests[requestId];
             emit MessageReceived(requestId, sourceChainId, minedRequest.sourceContract, minedRequest.methodCall);
 
             _executeIncomingRequest(incomingRequest, sourceChainId);
@@ -92,6 +93,9 @@ contract InboxMiner is InboxBase, MinerBase, IInboxMiner, ReentrancyGuard {
                     originalRequest.executed = true;
                     emit IncomingResponseReceived(originalRequestId, incomingRequest.requestId);
                 }
+            }
+            unchecked {
+                ++i;
             }
         }
 

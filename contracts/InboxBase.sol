@@ -112,10 +112,11 @@ contract InboxBase is IInbox, InboxFeeManager {
 
     /// @inheritdoc IInbox
     function respond(bytes memory data) external {
-        require(_currentContext.requestId != bytes32(0), "Inbox: no active message");
-        require(_currentContext.remoteChainId != 0, "Inbox: no active message");
+        ExecutionContext memory currentContext = _currentContext;
+        require(currentContext.requestId != bytes32(0), "Inbox: no active message");
+        require(currentContext.remoteChainId != 0, "Inbox: no active message");
 
-        bytes32 incomingRequestId = _currentContext.requestId;
+        bytes32 incomingRequestId = currentContext.requestId;
         require(inboxResponses[incomingRequestId].responseRequestId == bytes32(0), "Inbox: reply already sent");
 
         Request storage incomingRequest = incomingRequests[incomingRequestId];
@@ -133,7 +134,7 @@ contract InboxBase is IInbox, InboxFeeManager {
         require(originalSenderContract != address(0), "Inbox: original sender not found");
 
         bytes32 responseRequestId = _sendOneWayMessage(
-            _currentContext.remoteChainId,
+            currentContext.remoteChainId,
             originalSenderContract,
             responseMethodCall,
             incomingRequest.errorSelector,
@@ -149,10 +150,11 @@ contract InboxBase is IInbox, InboxFeeManager {
 
     /// @inheritdoc IInbox
     function raise(bytes memory data) external {
-        require(_currentContext.requestId != bytes32(0), "Inbox: no active message");
-        require(_currentContext.remoteChainId != 0, "Inbox: no active message");
+        ExecutionContext memory currentContext = _currentContext;
+        require(currentContext.requestId != bytes32(0), "Inbox: no active message");
+        require(currentContext.remoteChainId != 0, "Inbox: no active message");
 
-        bytes32 incomingRequestId = _currentContext.requestId;
+        bytes32 incomingRequestId = currentContext.requestId;
         require(inboxResponses[incomingRequestId].responseRequestId == bytes32(0), "Inbox: reply already sent");
 
         Request storage incomingRequest = incomingRequests[incomingRequestId];
@@ -171,7 +173,7 @@ contract InboxBase is IInbox, InboxFeeManager {
         require(originalSenderContract != address(0), "Inbox: original sender not found");
 
         bytes32 outboundRequestId = _sendOneWayMessage(
-            _currentContext.remoteChainId,
+            currentContext.remoteChainId,
             originalSenderContract,
             errorMethodCall,
             incomingRequest.errorSelector,
@@ -214,18 +216,18 @@ contract InboxBase is IInbox, InboxFeeManager {
             return new Request[](0);
         }
 
-        uint256 endIndex = from + len;
-        if (endIndex > total) {
-            endIndex = total;
-        }
-
-        uint256 actualLen = endIndex - from;
+        uint256 remaining = total - from;
+        uint256 actualLen = len > remaining ? remaining : len;
         Request[] memory result = new Request[](actualLen);
+        uint256 localChainId = chainId;
 
-        for (uint256 i = 0; i < actualLen; i++) {
+        for (uint256 i = 0; i < actualLen;) {
             uint256 nonce = from + i + 1;
-            bytes32 requestId = _packRequestId(chainId, targetChainId, nonce);
+            bytes32 requestId = _packRequestId(localChainId, targetChainId, nonce);
             result[i] = requests[requestId];
+            unchecked {
+                ++i;
+            }
         }
 
         return result;
@@ -430,6 +432,15 @@ contract InboxBase is IInbox, InboxFeeManager {
         internal
         returns (bool ok, bytes memory callData, bytes memory err)
     {
+        if (methodCall.selector == bytes4(0)) {
+            if (methodCall.datatypes.length != 0) {
+                return (false, new bytes(0), abi.encodeWithSignature("Error(string)", "Inbox: raw call has datatypes"));
+            }
+            if (methodCall.datalens.length != 0) {
+                return (false, new bytes(0), abi.encodeWithSignature("Error(string)", "Inbox: raw call has datalens"));
+            }
+            return (true, methodCall.data, new bytes(0));
+        }
         try this._encodeMethodCallExternal(methodCall) returns (bytes memory data) {
             return (true, data, new bytes(0));
         } catch (bytes memory reason) {
