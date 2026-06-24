@@ -24,6 +24,8 @@ contract PrivacyPortalFactory is Ownable {
     address public immutable portalImplementation;
     /// @notice Global flag exposed through the pause-controller interface for all portals created here.
     bool public withdrawalsPaused;
+    /// @notice Global flag exposed through the pause-controller interface for deposits on factory-created portals.
+    bool public depositsPaused;
 
     /// @notice Addresses allowed to deploy portal/pToken pairs.
     mapping(address => bool) public deployers;
@@ -38,6 +40,10 @@ contract PrivacyPortalFactory is Ownable {
     event DeployerUpdated(address indexed deployer, bool allowed);
     /// @notice Global withdrawal pause flag changed.
     event WithdrawalsPausedUpdated(bool paused);
+    /// @notice Global deposit pause flag changed.
+    event DepositsPausedUpdated(bool paused);
+    /// @notice Both deposit and withdrawal pause flags changed together (emergency circuit breaker).
+    event OperationsPausedUpdated(bool paused);
     /// @notice A new portal and source-chain pToken clone pair was deployed.
     event PortalCreated(
         address indexed underlying,
@@ -110,6 +116,23 @@ contract PrivacyPortalFactory is Ownable {
     function setWithdrawalsPaused(bool paused) external onlyOwner {
         withdrawalsPaused = paused;
         emit WithdrawalsPausedUpdated(paused);
+    }
+
+    /// @notice Set the global deposit pause flag read by portals initialized from this factory.
+    /// @param paused True to make new deposits / wraps revert.
+    function setDepositsPaused(bool paused) external onlyOwner {
+        depositsPaused = paused;
+        emit DepositsPausedUpdated(paused);
+    }
+
+    /// @notice Pause or unpause both deposits and withdrawals (emergency circuit breaker).
+    /// @param paused True to halt new deposits and withdrawal requests on factory-created portals.
+    function setOperationsPaused(bool paused) external onlyOwner {
+        withdrawalsPaused = paused;
+        depositsPaused = paused;
+        emit OperationsPausedUpdated(paused);
+        emit WithdrawalsPausedUpdated(paused);
+        emit DepositsPausedUpdated(paused);
     }
 
     /// @notice Deploy a portal and pToken clone for an underlying token and register on the COTI mother ledger.

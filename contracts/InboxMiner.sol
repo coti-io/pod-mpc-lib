@@ -1,19 +1,38 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.19;
 
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+
 import "./IInboxMiner.sol";
 import "./InboxBase.sol";
 import "./MinerBase.sol";
 
 /// @title InboxMiner
 /// @notice Miner-driven inbox: ingest mined payloads, execute targets, and collect fees.
-contract InboxMiner is InboxBase, MinerBase, IInboxMiner {
+contract InboxMiner is InboxBase, MinerBase, IInboxMiner, ReentrancyGuard {
+    /// @notice When true, {batchProcessRequests} and {retryFailedRequest} revert (circuit breaker).
+    bool public messageProcessingPaused;
+
     /// @dev `chainId` and the real owner are set later via the {Inbox.init} initializer
     /// so the creation bytecode is identical across chains (deterministic CreateX deploys).
     constructor() MinerBase(msg.sender) {}
 
+    /// @notice Pause or unpause inbound message processing (owner-only emergency stop).
+    /// @param paused True to halt {batchProcessRequests} and {retryFailedRequest}.
+    function setMessageProcessingPaused(bool paused) external onlyOwner {
+        messageProcessingPaused = paused;
+        emit MessageProcessingPausedUpdated(paused);
+    }
+
     /// @inheritdoc IInboxMiner
-    function batchProcessRequests(uint256 sourceChainId, MinedRequest[] memory mined) external onlyMiner {
+    function batchProcessRequests(uint256 sourceChainId, MinedRequest[] memory mined)
+        external
+        onlyMiner
+        nonReentrant
+    {
+        if (messageProcessingPaused) {
+            revert MessageProcessingPaused();
+        }
         if (sourceChainId == chainId) {
             revert SourceChainIsThisChain(chainId);
         }
@@ -101,7 +120,10 @@ contract InboxMiner is InboxBase, MinerBase, IInboxMiner {
 
     /// @dev Retries a failed request, if the method execution is failed. Caller pays the execution gas so we don't care about the gas limit.
     /// @param requestId The ID of the incoming request to retry.
-    function retryFailedRequest(bytes32 requestId) external {
+    function retryFailedRequest(bytes32 requestId) external nonReentrant {
+        if (messageProcessingPaused) {
+            revert MessageProcessingPaused();
+        }
         if (requestId == bytes32(0)) {
             revert RequestIdRequired();
         }
@@ -124,6 +146,8 @@ contract InboxMiner is InboxBase, MinerBase, IInboxMiner {
         );
         if (!encodedOk) {
             _recordEncodeError(requestId, encodeErr);
+            _currentContext = ExecutionContext({remoteChainId: 0, remoteContract: address(0), requestId: bytes32(0)});
+            return;
         }
 
         bool success;
@@ -133,7 +157,7 @@ contract InboxMiner is InboxBase, MinerBase, IInboxMiner {
 
         if (!success) {
             revert RetryFailedRequestExecutionFailed(returnData);
-        } 
+        }
 
         delete errors[requestId];
         emit RetryFailedRequestSuccess(requestId);
