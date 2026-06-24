@@ -137,7 +137,7 @@ Audit only for direct calls to the changed views above, or assumptions that "`re
 
 - `requestId` is now globally unique across all `(source, target)` pairs — you can drop any per-target keying workarounds.
 - You can derive **both** chains from an id (see `unpackRequestId` TS helper); previously only the source was recoverable.
-- Events are unchanged (`MessageSent` still carries indexed `requestId` + `targetChainId`).
+- Events: `MessageSent` / `MessageReceived` carry compact method-call metadata (`methodCallHash`, lengths, selector); full payload is in storage views.
 
 ## Pitfalls & Gotchas
 

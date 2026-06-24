@@ -80,7 +80,23 @@ contract InboxMiner is InboxBase, MinerBase, IInboxMiner, ReentrancyGuard {
             });
 
             incomingRequests[requestId] = newIncomingRequest;
-            emit MessageReceived(requestId, sourceChainId, minedRequest.sourceContract, minedRequest.methodCall);
+            (
+                bytes4 methodSelector,
+                bytes32 methodCallHash,
+                uint256 dataLength,
+                uint16 datatypeCount,
+                uint16 datalenCount
+            ) = _methodCallLogData(minedRequest.methodCall);
+            emit MessageReceived(
+                requestId,
+                sourceChainId,
+                minedRequest.sourceContract,
+                methodSelector,
+                methodCallHash,
+                dataLength,
+                datatypeCount,
+                datalenCount
+            );
 
             _executeIncomingRequest(incomingRequest, sourceChainId);
 

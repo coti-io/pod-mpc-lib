@@ -8,7 +8,7 @@ Scope: `InboxBase`, `InboxMiner`, `InboxFeeManager`, `MpcAbiCodec`, Inbox tests/
 The Inbox system's gas cost is dominated by three categories:
 
 1. Full `Request` storage writes that include dynamic `MpcMethodCall` payloads.
-2. Full method-call payload logging in `MessageSent` and `MessageReceived`.
+2. ~~Full method-call payload logging in `MessageSent` and `MessageReceived`.~~ **Resolved:** compact log metadata (G-01).
 3. Inbound execution overhead: encoding/validation plus the target subcall stipend.
 
 The first implementation pass keeps public semantics and event shapes unchanged. It focuses on low-risk savings:
@@ -51,11 +51,19 @@ Affected:
 - `InboxBase.MessageSent`
 - `InboxBase.MessageReceived`
 
-Both events include the full `MpcMethodCall`, which duplicates data already stored in request state. This is likely the largest optional Inbox overhead for large payloads.
+Both events previously included the full `MpcMethodCall`, duplicating data already stored in request state.
 
-Risk: high compatibility impact. Relayers and off-chain tooling may depend on full event payloads.
+Risk: high compatibility impact for log-only indexers.
 
-Recommendation: decide separately whether to add compact events (`methodCallHash`, lengths, selectors) while keeping the existing events for compatibility, or to replace full-payload events in a breaking release.
+Status: **optimized (2026-06-24).** Events now emit compact metadata only:
+
+- `methodSelector` (`bytes4`)
+- `methodCallHash` (`keccak256(abi.encode(methodCall))`)
+- `dataLength`, `datatypeCount`, `datalenCount`
+
+Full payloads remain in `requests` / `incomingRequests` and are available via `getRequest`, `getRequests`, and `getIncomingRequest`. Miners/relayers in this repo already source payloads from `getRequests`, not logs.
+
+**Indexer migration:** replace log-decoded `methodCall` with `getRequest(requestId)` (or verify correlation via `methodCallHash`).
 
 ### G-02: Full dynamic `Request` storage dominates send and mine paths
 
@@ -124,18 +132,15 @@ Recommendation: add a lightweight summary getter and document recommended page s
 
 ## Event Compression Tradeoffs
 
-Event compression is the biggest likely gas win, but it changes off-chain behavior. The current events allow a relayer or indexer to reconstruct request payloads from logs alone. A compact design would require reading request storage or using a separate payload availability channel.
+`MessageSent` / `MessageReceived` now use compact metadata (G-01). Full payloads are no longer duplicated in logs.
 
-Options:
+Remaining observability tradeoffs are mostly about **storage** compaction (G-02), not logs:
 
 | Option | Gas Impact | Compatibility |
 | --- | --- | --- |
-| Keep full events | None | Fully compatible |
-| Add compact events alongside full events | More gas, better migration | Compatible, not an optimization yet |
-| Replace full events with compact events | Largest savings | Breaking for log-only relayers/indexers |
-| Emit full payload only for debug/test deployments | Large production savings | Requires deployment-mode policy |
-
-Recommendation: keep full events for now. If production payloads are large enough to justify compression, introduce a migration period with both full and compact events plus relayer updates.
+| Compact logs + full storage (current) | Large log savings | Indexers must use `getRequest` for payload bytes |
+| Compact storage (metadata + hash on-chain) | Large storage savings | Requires off-chain payload availability for retry |
+| Summary getters only | Read-path savings | No send/mine impact |
 
 ## Follow-Up Candidates
 

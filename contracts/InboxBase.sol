@@ -37,21 +37,31 @@ contract InboxBase is IInbox, InboxFeeManager {
     uint64 internal constant ERROR_CODE_ENCODE_FAILED = 2;
 
     /// @notice Outbound cross-chain request was created.
+    /// @dev Payload bytes are stored in {requests}; logs carry only compact metadata for gas efficiency.
     event MessageSent(
         bytes32 indexed requestId,
         uint256 indexed targetChainId,
         address indexed targetContract,
-        MpcMethodCall methodCall,
+        bytes4 methodSelector,
+        bytes32 methodCallHash,
+        uint256 dataLength,
+        uint16 datatypeCount,
+        uint16 datalenCount,
         bytes4 callbackSelector,
         bytes4 errorSelector
     );
 
     /// @notice Incoming cross-chain request was accepted for execution.
+    /// @dev Payload bytes are stored in {incomingRequests}; logs carry only compact metadata for gas efficiency.
     event MessageReceived(
         bytes32 indexed requestId,
         uint256 indexed sourceChainId,
         address indexed sourceContract,
-        MpcMethodCall methodCall
+        bytes4 methodSelector,
+        bytes32 methodCallHash,
+        uint256 dataLength,
+        uint16 datatypeCount,
+        uint16 datalenCount
     );
 
     /// @notice Target replied to an incoming request and a response request was created.
@@ -376,8 +386,45 @@ contract InboxBase is IInbox, InboxFeeManager {
 
         requests[requestId] = request;
 
-        emit MessageSent(requestId, targetChainId, targetContract, methodCall, callbackSelector, errorSelector);
+        (
+            bytes4 methodSelector,
+            bytes32 methodCallHash,
+            uint256 dataLength,
+            uint16 datatypeCount,
+            uint16 datalenCount
+        ) = _methodCallLogData(methodCall);
+        emit MessageSent(
+            requestId,
+            targetChainId,
+            targetContract,
+            methodSelector,
+            methodCallHash,
+            dataLength,
+            datatypeCount,
+            datalenCount,
+            callbackSelector,
+            errorSelector
+        );
         return requestId;
+    }
+
+    /// @dev Compact log metadata for {MessageSent} and {MessageReceived}.
+    function _methodCallLogData(MpcMethodCall memory methodCall)
+        internal
+        pure
+        returns (
+            bytes4 methodSelector,
+            bytes32 methodCallHash,
+            uint256 dataLength,
+            uint16 datatypeCount,
+            uint16 datalenCount
+        )
+    {
+        methodSelector = methodCall.selector;
+        methodCallHash = keccak256(abi.encode(methodCall));
+        dataLength = methodCall.data.length;
+        datatypeCount = uint16(methodCall.datatypes.length);
+        datalenCount = uint16(methodCall.datalens.length);
     }
 
     /// @dev Packs source chain id (64 bits), target chain id (64 bits) and nonce (128 bits) into a
