@@ -160,6 +160,23 @@ describe("PrivacyPortal", { concurrency: 1 }, async function () {
     );
   });
 
+  it("factory deposit pause disables deposits across factory-created portals", async function () {
+    ctx = await freshPortal();
+    const { factory, portal, underlying } = await deployFactoryPortalPair(ctx);
+    const factoryPortal = await viem.getContractAt("PrivacyPortal", portal, {
+      client: { public: publicClient, wallet },
+    });
+
+    await underlying.write.mint([owner, 100n], { account: owner });
+    await underlying.write.approve([portal, 100n], { account: owner });
+    await factory.write.setDepositsPaused([true], { account: owner });
+
+    await assert.rejects(
+      factoryPortal.write.deposit([owner, 50n, 77n], { account: owner, value: 1_000n }),
+      /DepositsPaused/
+    );
+  });
+
   it("COTI mother contract deploys and allowlists source factories", async function () {
     ctx = await freshPortal();
     const { mother, factory, inbox } = await deployPortalFactory(ctx);

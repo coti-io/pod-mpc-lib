@@ -15,9 +15,13 @@ interface IInboxMiner {
     error RequestSourceChainMismatch(bytes32 requestId, uint256 expectedSourceChainId, uint256 actualSourceChainId);
     /// @notice A mined request's encoded target chain is not this chain.
     error RequestTargetChainMismatch(bytes32 requestId, uint256 expectedTargetChainId, uint256 actualTargetChainId);
+    /// @notice Inbound message processing is paused (circuit breaker).
+    error MessageProcessingPaused();
 
     /// @notice Emitted when {retryFailedRequest} successfully re-executes a previously failed incoming request.
     event RetryFailedRequestSuccess(bytes32 indexed requestId);
+    /// @notice Emitted when the owner toggles the message-processing circuit breaker.
+    event MessageProcessingPausedUpdated(bool paused);
 
     /// @notice Mined inbound request. `targetFee` and `callerFee` are gas unit budgets (see {IInbox.Request}).
     struct MinedRequest {
@@ -40,6 +44,9 @@ interface IInboxMiner {
 
     /// @notice Withdraw accumulated native token fees to `to` (owner-only in concrete implementations).
     function collectFees(address payable to) external;
+
+    /// @notice Pause or unpause inbound message processing (owner-only circuit breaker).
+    function setMessageProcessingPaused(bool paused) external;
 
     /// @notice Re-execute a mined incoming request whose target call failed (e.g. OOG). Open to any payer for gas.
     function retryFailedRequest(bytes32 requestId) external;

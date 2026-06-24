@@ -107,7 +107,7 @@ interface IPrivacyPortal {
     /// @param withdrawalId Withdrawal id to release.
     function triggerWithdrawalRelease(bytes32 withdrawalId) external;
 
-    /// @notice Update or disable the external withdrawals pause controller.
+    /// @notice Update or disable the external pause controller for deposits and withdrawals.
     /// @param pauseController New controller address, or zero to disable pause checks.
     function setPauseController(address pauseController) external;
 

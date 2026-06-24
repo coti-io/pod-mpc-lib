@@ -11,10 +11,13 @@ import "../token/erc7984/IERC7984PortalWrapper.sol";
 import "../utils/IWrappedNative.sol";
 import "./IPrivacyPortal.sol";
 
-/// @notice Optional external policy hook for pausing new withdrawal requests.
+/// @notice Optional external policy hook for pausing portal operations.
 interface IPrivacyPortalPauseController {
     /// @notice Whether new withdrawal requests should revert.
     function withdrawalsPaused() external view returns (bool);
+
+    /// @notice Whether new deposits / wraps should revert.
+    function depositsPaused() external view returns (bool);
 }
 
 /// @title PrivacyPortal
@@ -27,7 +30,7 @@ contract PrivacyPortal is IPrivacyPortal, IERC7984PortalWrapper, Ownable, Reentr
     IERC20 public underlyingToken;
     /// @notice Private pToken minted and burned against the underlying collateral.
     IPodERC20 public pToken;
-    /// @notice Optional pause controller for new withdrawal requests; zero disables pause checks.
+    /// @notice Optional pause controller for deposits and withdrawals; zero disables pause checks.
     address public pauseController;
     /// @notice Token decimals mirrored from the underlying/pToken pair.
     uint8 public decimals;
@@ -88,6 +91,10 @@ contract PrivacyPortal is IPrivacyPortal, IERC7984PortalWrapper, Ownable, Reentr
     error PortalAlreadyInitialized();
     /// @notice Pause controller reports withdrawals are paused.
     error WithdrawalsPaused();
+    /// @notice Pause controller reports deposits are paused.
+    error DepositsPaused();
+    /// @notice Configured pause controller did not return a valid pause flag.
+    error PauseControllerFault();
     /// @notice pToken transfer request has not succeeded yet.
     error PTokenTransferNotSuccessful(bytes32 requestId, IPodERC20.RequestStatus status);
     /// @notice Portal underlying is not configured for native wrap/unwrap.
@@ -127,8 +134,9 @@ contract PrivacyPortal is IPrivacyPortal, IERC7984PortalWrapper, Ownable, Reentr
         emit PauseControllerUpdated(msg.sender);
     }
 
-    /// @notice Update the external pause controller checked before new withdrawal requests.
-    /// @dev Set to `address(0)` to disable pause checks. The controller is expected to implement `withdrawalsPaused()`.
+    /// @notice Update the external pause controller checked before deposits and withdrawal requests.
+    /// @dev Set to `address(0)` to disable pause checks. When non-zero, the controller must implement
+    ///      {IPrivacyPortalPauseController}; failed staticcalls revert (fail-closed).
     /// @param pauseController_ New controller address, or zero to disable.
     function setPauseController(address pauseController_) external onlyOwner {
         pauseController = pauseController_;
@@ -148,6 +156,7 @@ contract PrivacyPortal is IPrivacyPortal, IERC7984PortalWrapper, Ownable, Reentr
         private
         returns (bytes32 requestId)
     {
+        _checkDepositsNotPaused();
         if (recipient == address(0)) {
             revert InvalidAddress();
         }
@@ -170,6 +179,7 @@ contract PrivacyPortal is IPrivacyPortal, IERC7984PortalWrapper, Ownable, Reentr
         if (!nativeWrappedUnderlying) {
             revert NativeWrapDisabled();
         }
+        _checkDepositsNotPaused();
         if (recipient == address(0)) {
             revert InvalidAddress();
         }
@@ -370,14 +380,31 @@ contract PrivacyPortal is IPrivacyPortal, IERC7984PortalWrapper, Ownable, Reentr
 
     /// @notice Query the optional pause controller and revert when it reports withdrawals paused.
     function _checkWithdrawalsNotPaused() private view {
-        if (pauseController == address(0)) {
-            return;
-        }
-        (bool success, bytes memory data) = pauseController.staticcall(
-            abi.encodeCall(IPrivacyPortalPauseController.withdrawalsPaused, ())
-        );
-        if (success && data.length >= 32 && abi.decode(data, (bool))) {
+        if (_pauseFlag(IPrivacyPortalPauseController.withdrawalsPaused.selector)) {
             revert WithdrawalsPaused();
         }
+    }
+
+    /// @notice Query the optional pause controller and revert when it reports deposits paused.
+    function _checkDepositsNotPaused() private view {
+        if (_pauseFlag(IPrivacyPortalPauseController.depositsPaused.selector)) {
+            revert DepositsPaused();
+        }
+    }
+
+    /// @dev Returns the pause flag from {pauseController}. Disabled when zero; fail-closed for contracts.
+    function _pauseFlag(bytes4 selector) private view returns (bool) {
+        address controller = pauseController;
+        if (controller == address(0)) {
+            return false;
+        }
+        if (controller.code.length == 0) {
+            return false;
+        }
+        (bool success, bytes memory data) = controller.staticcall(abi.encodeWithSelector(selector));
+        if (!success || data.length < 32) {
+            revert PauseControllerFault();
+        }
+        return abi.decode(data, (bool));
     }
 }
