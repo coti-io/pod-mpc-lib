@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.20;
 
 import "../token/erc7984/PodErc7984Mixin.sol";
 import "../token/perc20/IPodERC20.sol";

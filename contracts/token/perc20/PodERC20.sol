@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.20;
 
 import "../../InboxUser.sol";
 import "../../fee/IInboxFeeManager.sol";
 import "../../mpccodec/MpcAbiCodec.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import "./IPodERC20.sol";
 import "./cotiside/IPodErc20CotiSide.sol";
 import "../erc7984/PodErc7984Mixin.sol";
@@ -12,7 +13,8 @@ import "../erc7984/PodErc7984Mixin.sol";
 /// @title PodERC20
 /// @notice PoD-side private ERC-20: ciphertext cache and inbox-mediated async moves; COTI holds authoritative garbled state via {IPodErc20CotiSide}.
 /// @dev Callbacks only from `inbox` when the remote peer matches (`cotiChainId`, `cotiSideContract`). Public-amount methods expose amounts in calldata and logs; use encrypted `itUint256` entry points for privacy-sensitive flows.
-contract PodERC20 is IPodERC20, InboxUser, PodErc7984Mixin {
+///      {_sendPodTwoWay} is `nonReentrant` so a compromised inbox/oracle cannot re-enter before pending locks are written.
+contract PodERC20 is IPodERC20, InboxUser, PodErc7984Mixin, ReentrancyGuardTransient {
     using MpcAbiCodec for MpcAbiCodec.MpcMethodCallContext;
 
     // --- State variables ---
@@ -507,7 +509,7 @@ contract PodERC20 is IPodERC20, InboxUser, PodErc7984Mixin {
         IInbox.MpcMethodCall memory mpcMethodCall,
         bytes4 callbackSelector_,
         bytes4 errorSelector_
-    ) internal returns (bytes32) {
+    ) internal nonReentrant returns (bytes32) {
         require(callbackFeeLocalWei >= 1, "PodERC20: callback fee min");
         require(callbackFeeLocalWei <= totalValueWei, "PodERC20: callback exceeds total");
         require(address(this).balance >= totalValueWei, "PodERC20: inbox fee");

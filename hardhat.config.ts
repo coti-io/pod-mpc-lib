@@ -85,7 +85,7 @@ export default defineConfig({
     version: "0.8.28",
     preferWasm: false,
     settings: {
-      evmVersion: "paris",
+      evmVersion: "cancun",
       viaIR: true,
       optimizer: {
         enabled: true,
