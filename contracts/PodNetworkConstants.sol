@@ -7,7 +7,7 @@ library PodNetworkConstants {
     /// @notice Deterministic inbox address shared by every chain (CreateX CREATE3 deploy).
     /// @dev Same value on Sepolia, COTI testnet, and Avalanche Fuji because the CREATE3 address
     /// depends only on the deployer EOA and salt (see scripts/createx.ts).
-    address internal constant INBOX = 0xd0d7d663217fc531504b930d810995118768Fa37;
+    address internal constant INBOX = 0xAb625bE229F603f6BBF964474AFf6d5487e364De;
 
     /// @notice Source-chain inbox used by PoD dapps on Sepolia.
     address internal constant SEPOLIA_INBOX = INBOX;

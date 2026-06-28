@@ -42,7 +42,7 @@ contract PodERC20 is IPodERC20, InboxUser, PodErc7984Mixin {
     bytes32 private constant PERMIT_DOMAIN_VERSION_HASH = keccak256("1");
     mapping(address => ctUint256) private _balances;
     mapping(address => mapping(address => IPodERC20.Allowance)) private _allowance;
-    /// @dev One in-flight transfer or burn per address (used as both sender and receiver lock for transfers).
+    /// @dev One in-flight transfer or burn per sender; mints lock the recipient until callback.
     mapping(address => bytes32) private _pendingTransferRequestIds;
     mapping(address => mapping(address => bytes32)) private _pendingApprovalRequestIds;
     /// @dev Optional `transferAndCall` payload keyed by inbox `sourceRequestId`, cleared after callback.
@@ -67,7 +67,7 @@ contract PodERC20 is IPodERC20, InboxUser, PodErc7984Mixin {
 
     // --- Errors ---
 
-    /// @notice A transfer/burn lock already exists for one of the affected accounts.
+    /// @notice A transfer or burn lock already exists for the sender (or mint lock for the recipient).
     error TransferAlreadyPending(address from, address to, bytes32 requestId);
     /// @notice An approval lock already exists for the owner/spender pair.
     error ApprovalAlreadyPending(address owner, address spender, bytes32 requestId);
@@ -293,7 +293,9 @@ contract PodERC20 is IPodERC20, InboxUser, PodErc7984Mixin {
             }
         }
         if (to != address(0)) {
-            _pendingTransferRequestIds[to] = bytes32(0);
+            if (from == address(0)) {
+                _pendingTransferRequestIds[to] = bytes32(0);
+            }
             if (balanceNonces[to] < nonce) {
                 _balances[to] = newBalanceTo;
                 balanceNonces[to] = nonce;
@@ -361,7 +363,7 @@ contract PodERC20 is IPodERC20, InboxUser, PodErc7984Mixin {
 
     /**
      * @notice Clears pending transfer state and records `failedRequests` for this `sourceRequestId`.
-     * @dev **Gotcha:** when both `from` and `to` were locked, both are cleared; `TransferFailed` carries decoded addresses.
+     * @dev Transfers and burns lock only `from`; mints lock only `to` (`from == address(0)` in the error payload).
      */
     function transferError(bytes memory data) external onlyInbox {
         (uint256 remoteChainId, address remoteContract) = inbox.inboxMsgSender();
@@ -374,8 +376,9 @@ contract PodERC20 is IPodERC20, InboxUser, PodErc7984Mixin {
         failedRequests[sourceRequestId] = errorMsg;
         if (from != address(0)) {
             _pendingTransferRequestIds[from] = bytes32(0);
+        } else if (to != address(0)) {
+            _pendingTransferRequestIds[to] = bytes32(0);
         }
-        _pendingTransferRequestIds[to] = bytes32(0);
         emit TransferFailed(from, to, errorMsg);
     }
 
@@ -569,8 +572,7 @@ contract PodERC20 is IPodERC20, InboxUser, PodErc7984Mixin {
     }
 
     /**
-     * @dev **Gotcha:** `TransferAlreadyPending` carries `_pendingTransferRequestIds[from]` even when `to` was the party that
-     *      was actually pending—inspect both sides off-chain when debugging reverts.
+     * @dev Transfers lock only `from`; receivers accept concurrent in-flight credits (nonce ordering on callback).
      */
     function _transfer(
         bytes4 remoteTransferSelector,
@@ -580,7 +582,7 @@ contract PodERC20 is IPodERC20, InboxUser, PodErc7984Mixin {
         uint256 totalValueWei,
         uint256 callbackFeeLocalWei
     ) internal returns (bytes32 requestId) {
-        if (_pendingTransferRequestIds[from] != bytes32(0) || _pendingTransferRequestIds[to] != bytes32(0)) {
+        if (_pendingTransferRequestIds[from] != bytes32(0)) {
             revert TransferAlreadyPending(from, to, _pendingTransferRequestIds[from]);
         }
 
@@ -599,7 +601,6 @@ contract PodERC20 is IPodERC20, InboxUser, PodErc7984Mixin {
         );
         _setRequestStatus(requestId, IPodERC20.RequestStatus.Pending);
         _pendingTransferRequestIds[from] = requestId;
-        _pendingTransferRequestIds[to] = requestId;
         emit TransferRequestSubmitted(msg.sender, to, requestId);
     }
 
@@ -612,7 +613,7 @@ contract PodERC20 is IPodERC20, InboxUser, PodErc7984Mixin {
         uint256 totalValueWei,
         uint256 callbackFeeLocalWei
     ) internal returns (bytes32 requestId) {
-        if (_pendingTransferRequestIds[from] != bytes32(0) || _pendingTransferRequestIds[to] != bytes32(0)) {
+        if (_pendingTransferRequestIds[from] != bytes32(0)) {
             revert TransferAlreadyPending(from, to, _pendingTransferRequestIds[from]);
         }
 
@@ -632,7 +633,6 @@ contract PodERC20 is IPodERC20, InboxUser, PodErc7984Mixin {
         );
         _setRequestStatus(requestId, IPodERC20.RequestStatus.Pending);
         _pendingTransferRequestIds[from] = requestId;
-        _pendingTransferRequestIds[to] = requestId;
         emit TransferRequestSubmitted(from, to, requestId);
     }
 
@@ -727,7 +727,7 @@ contract PodERC20 is IPodERC20, InboxUser, PodErc7984Mixin {
         uint256 totalValueWei,
         uint256 callbackFeeLocalWei
     ) internal returns (bytes32 requestId) {
-        if (_pendingTransferRequestIds[from] != bytes32(0) || _pendingTransferRequestIds[to] != bytes32(0)) {
+        if (_pendingTransferRequestIds[from] != bytes32(0)) {
             revert TransferAlreadyPending(from, to, _pendingTransferRequestIds[from]);
         }
 
@@ -746,7 +746,6 @@ contract PodERC20 is IPodERC20, InboxUser, PodErc7984Mixin {
         );
         _setRequestStatus(requestId, IPodERC20.RequestStatus.Pending);
         _pendingTransferRequestIds[from] = requestId;
-        _pendingTransferRequestIds[to] = requestId;
         emit TransferRequestSubmitted(msg.sender, to, requestId);
     }
 
@@ -759,7 +758,7 @@ contract PodERC20 is IPodERC20, InboxUser, PodErc7984Mixin {
         uint256 totalValueWei,
         uint256 callbackFeeLocalWei
     ) internal returns (bytes32 requestId) {
-        if (_pendingTransferRequestIds[from] != bytes32(0) || _pendingTransferRequestIds[to] != bytes32(0)) {
+        if (_pendingTransferRequestIds[from] != bytes32(0)) {
             revert TransferAlreadyPending(from, to, _pendingTransferRequestIds[from]);
         }
 
@@ -779,7 +778,6 @@ contract PodERC20 is IPodERC20, InboxUser, PodErc7984Mixin {
         );
         _setRequestStatus(requestId, IPodERC20.RequestStatus.Pending);
         _pendingTransferRequestIds[from] = requestId;
-        _pendingTransferRequestIds[to] = requestId;
         emit TransferRequestSubmitted(from, to, requestId);
     }
 
@@ -792,7 +790,7 @@ contract PodERC20 is IPodERC20, InboxUser, PodErc7984Mixin {
         uint256 totalValueWei,
         uint256 callbackFeeLocalWei
     ) internal returns (bytes32 requestId) {
-        if (_pendingTransferRequestIds[from] != bytes32(0) || _pendingTransferRequestIds[to] != bytes32(0)) {
+        if (_pendingTransferRequestIds[from] != bytes32(0)) {
             revert TransferAlreadyPending(from, to, _pendingTransferRequestIds[from]);
         }
         _consumePublicTransferPermit(from, spender, to, amount, permit);
@@ -812,7 +810,6 @@ contract PodERC20 is IPodERC20, InboxUser, PodErc7984Mixin {
         );
         _setRequestStatus(requestId, IPodERC20.RequestStatus.Pending);
         _pendingTransferRequestIds[from] = requestId;
-        _pendingTransferRequestIds[to] = requestId;
         emit TransferRequestSubmitted(from, to, requestId);
     }
 

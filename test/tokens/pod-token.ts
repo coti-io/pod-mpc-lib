@@ -151,6 +151,48 @@ d("PodERC20 (cross-chain token)", { concurrency: 1 }, async function () {
     pt("case approve+transferFrom: done (PoD allowance mirror unchanged as expected)");
   });
 
+  it("allows transfer to a recipient while they are not sender-pending (receiver not locked)", async function () {
+    pt("case receiver not locked: start");
+    const start = 5_000n;
+    const ownerToBob = 100n;
+    const bobToOwner = 50n;
+    pt(`case receiver not locked: fund owner=${start} bob=${start}`);
+    await mintOnCotiAndSync(ctx, [
+      { address: ctx.owner, amount: start },
+      { address: ctx.bob.address, amount: start },
+    ], "recvNotLockedFund");
+
+    pt("case receiver not locked: owner -> bob (PoD only, not mined yet)");
+    const itOwnerSend = await encryptAmount(ctx, ownerToBob);
+    const ownerTx = await ctx.podAsCoti.write.transfer(
+      [ctx.bob.address, itOwnerSend, ctx.base.podTwoWayFees.callbackFeeWei],
+      podTwoWayWriteOptions(ctx.base.podTwoWayFees)
+    );
+    await ctx.base.sepolia.publicClient.waitForTransactionReceipt({ hash: ownerTx });
+    const ownerMid = await readBalanceWithPending(ctx, ctx.owner);
+    const bobMid = await readBalanceWithPending(ctx, ctx.bob.address);
+    assert.equal(ownerMid.pending, true);
+    assert.equal(bobMid.pending, false);
+    pt("case receiver not locked: bob -> owner should succeed while owner->bob is in flight");
+
+    const itBobSend = await encryptAmount(ctx, bobToOwner);
+    const bobTx = await ctx.podAsCoti.write.transfer(
+      [ctx.owner, itBobSend, ctx.base.podTwoWayFees.callbackFeeWei],
+      podTwoWayWriteOptions(ctx.base.podTwoWayFees)
+    );
+    await ctx.base.sepolia.publicClient.waitForTransactionReceipt({ hash: bobTx });
+    const bobAfter = await readBalanceWithPending(ctx, ctx.bob.address);
+    assert.equal(bobAfter.pending, true);
+
+    pt("case receiver not locked: mine both round-trips");
+    await mineLatestOutboundRoundTrip(ctx, "recvNotLockedMine1");
+    await mineLatestOutboundRoundTrip(ctx, "recvNotLockedMine2");
+
+    assert.equal(await readDecryptedBalance(ctx, ctx.owner), start - ownerToBob + bobToOwner);
+    assert.equal(await readDecryptedBalance(ctx, ctx.bob.address), start + ownerToBob - bobToOwner);
+    pt("case receiver not locked: done");
+  });
+
   it("reverts with TransferAlreadyPending while a transfer is in flight", async function () {
     pt("case pending guard: start");
     const start = 4_000n;
