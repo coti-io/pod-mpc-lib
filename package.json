@@ -1,6 +1,27 @@
 {
   "name": "pod-mpc-lib",
   "version": "1.0.0",
+  "description": "Smart contracts and Hardhat tooling for COTI Privacy on Demand (PoD): cross-chain Inbox messaging, MPC executors, PodLib primitives, Privacy Portal, and private ERC20/ERC7984 tokens.",
+  "author": "COTI Development",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/coti-io/pod-mpc-lib.git"
+  },
+  "homepage": "https://docs.coti.io/coti-documentation/privacy-on-demand",
+  "keywords": [
+    "coti",
+    "pod",
+    "privacy",
+    "mpc",
+    "cross-chain",
+    "ethereum",
+    "blockchain",
+    "web3",
+    "smart-contracts",
+    "hardhat",
+    "inbox",
+    "garbled-circuits"
+  ],
   "type": "module",
   "scripts": {
     "postinstall": "patch-package",
