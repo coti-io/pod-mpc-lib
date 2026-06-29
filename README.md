@@ -7,6 +7,12 @@
 
 # COTI Cross-chain MPC Contracts
 
+> **This repo is being superseded.** See [MIGRATION.md](./MIGRATION.md).
+>
+> - Inbox: [coti-pod-inbox-contracts](https://github.com/coti-io/coti-pod-inbox-contracts)
+> - dApps: [coti-contracts](https://github.com/coti-io/coti-contracts) (`contracts/pod/`)
+> - Tests & workspace: [pod-ecosystem-integration](https://github.com/coti-io/pod-ecosystem-integration)
+
 This repo includes the COTI x-chain contracts including MPC add-ons.
 
 ## Inbox
